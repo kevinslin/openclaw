@@ -70,6 +70,31 @@ const JSON_SCHEMA_TYPES = new Set([
   "object",
   "string",
 ]);
+const JSON_SCHEMA_DICTIONARY_KEYS = [
+  "$defs",
+  "definitions",
+  "dependentSchemas",
+  "patternProperties",
+];
+const JSON_SCHEMA_RESERVED_KEYWORDS = new Set([
+  "$defs",
+  "$ref",
+  "additionalProperties",
+  "allOf",
+  "anyOf",
+  "default",
+  "definitions",
+  "dependentSchemas",
+  "description",
+  "enum",
+  "items",
+  "oneOf",
+  "patternProperties",
+  "properties",
+  "required",
+  "title",
+  "type",
+]);
 
 function sanitizeJsonSchemaNode(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -107,6 +132,38 @@ function sanitizeJsonSchemaNode(value: unknown): unknown {
   const sanitized: Record<string, unknown> = Object.fromEntries(
     Object.entries(value).map(([key, entry]) => [key, sanitizeJsonSchemaNode(entry)]),
   );
+
+  if (isRecord(sanitized.properties)) {
+    sanitized.properties = Object.fromEntries(
+      Object.entries(sanitized.properties).flatMap(([key, entry]) =>
+        (isRecord(entry) || typeof entry === "boolean") &&
+        !(typeof entry === "boolean" && JSON_SCHEMA_RESERVED_KEYWORDS.has(key))
+          ? [[key, entry]]
+          : [],
+      ),
+    );
+  }
+
+  for (const key of JSON_SCHEMA_DICTIONARY_KEYS) {
+    if (!isRecord(sanitized[key])) {
+      continue;
+    }
+    sanitized[key] = Object.fromEntries(
+      Object.entries(sanitized[key]).flatMap(([entryKey, entryValue]) =>
+        (isRecord(entryValue) || typeof entryValue === "boolean") &&
+        !(typeof entryValue === "boolean" && JSON_SCHEMA_RESERVED_KEYWORDS.has(entryKey))
+          ? [[entryKey, entryValue]]
+          : [],
+      ),
+    );
+  }
+
+  if ("additionalProperties" in sanitized) {
+    const additionalProperties = sanitized.additionalProperties;
+    if (typeof additionalProperties !== "boolean" && !isRecord(additionalProperties)) {
+      sanitized.additionalProperties = true;
+    }
+  }
 
   if (sanitized.default === null) {
     delete sanitized.default;
@@ -257,8 +314,17 @@ function sanitizeToolIcons(icons: unknown): Tool["icons"] | undefined {
   return sanitizedIcons.length > 0 ? sanitizedIcons : undefined;
 }
 
+function sanitizePublishedToolNameSegment(value: string): string {
+  const sanitized = value
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/_+/g, "_");
+  return sanitized || "tool";
+}
+
 function rewriteToolName(connectorId: string, remoteToolName: string): string {
-  return `chatgpt_app__${connectorId}__${remoteToolName}`;
+  return `chatgpt_app__${connectorId}__${sanitizePublishedToolNameSegment(remoteToolName)}`;
 }
 
 function normalizeConnectorKey(value: string): string {

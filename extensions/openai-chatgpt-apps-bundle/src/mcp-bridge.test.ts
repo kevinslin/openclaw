@@ -772,7 +772,7 @@ describe("ChatgptAppsMcpBridge", () => {
 
     await expect(bridge.listTools()).resolves.toEqual([
       expect.objectContaining({
-        name: "chatgpt_app__google_calendar__google calendar_search_events",
+        name: "chatgpt_app__google_calendar__google_calendar_search_events",
       }),
     ]);
   });
@@ -923,6 +923,111 @@ describe("ChatgptAppsMcpBridge", () => {
           properties: {
             query: {
               $ref: "#/$defs/filterValue",
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("drops non-schema entries from nested properties and $defs maps", async () => {
+    const listTools = vi.fn(async () => ({
+      tools: [
+        {
+          name: "gong_search",
+          description: "Search Gong",
+          _meta: {
+            connector_id: "gong",
+          },
+          inputSchema: {
+            type: "object",
+            properties: {
+              date_range: {
+                $ref: "#/$defs/DateRange",
+              },
+            },
+            $defs: {
+              DateRange: {
+                type: "object",
+                properties: {
+                  start_date: {
+                    type: "string",
+                  },
+                  end_date: {
+                    type: "string",
+                  },
+                  type: "object",
+                  additionalProperties: true,
+                },
+              },
+              type: "object",
+              additionalProperties: true,
+            },
+          },
+        },
+      ] satisfies Tool[],
+    }));
+
+    const bridge = new ChatgptAppsMcpBridge({
+      loadOpenClawConfig: () => createConfig(),
+      ensureFreshSnapshot: async () => ({
+        status: "error",
+        reason: "refresh",
+        message: "Timed out refreshing ChatGPT apps snapshot",
+        config: {
+          enabled: true,
+          chatgptBaseUrl: "https://chatgpt.com",
+          appServer: { command: "codex", args: [] },
+          linking: {
+            enabled: false,
+            waitTimeoutMs: 60_000,
+            pollIntervalMs: 3_000,
+          },
+          connectors: {
+            gong: { enabled: true },
+          },
+        },
+        openclawConfig: createConfig(),
+        statePaths: resolveChatgptAppsStatePaths({
+          OPENCLAW_STATE_DIR: path.join(os.tmpdir(), "openclaw-chatgpt-apps-bridge"),
+          HOME: os.tmpdir(),
+        }),
+      }),
+      resolveProjectedAuth: async () => ({
+        status: "ok",
+        accessToken: "access-token",
+        accountId: "acct_123",
+        planType: null,
+        profileId: "openai-codex:default",
+        identity: { email: "user@example.com", profileName: "user@example.com" },
+      }),
+      remoteClientFactory: async () => ({
+        listTools,
+        callTool: async () => ({
+          content: [{ type: "text", text: "ok" }],
+        }),
+        close: async () => {},
+      }),
+    });
+
+    const tools = await bridge.listTools();
+    expect(tools).toHaveLength(1);
+    expect(tools[0]?.inputSchema).toEqual({
+      type: "object",
+      properties: {
+        date_range: {
+          $ref: "#/$defs/DateRange",
+        },
+      },
+      $defs: {
+        DateRange: {
+          type: "object",
+          properties: {
+            start_date: {
+              type: "string",
+            },
+            end_date: {
+              type: "string",
             },
           },
         },
