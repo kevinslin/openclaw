@@ -30,6 +30,7 @@ type RemoteTool = protocol.Tool;
 
 export const MCP_SERVER_NAME = "openai-chatgpt-apps";
 const ROUTING_META_KEY = "openclaw/chatgpt-apps";
+const INITIAL_WILDCARD_REFRESH_TIMEOUT_MS = 20_000;
 
 type BridgeRoute = {
   connectorId: string;
@@ -308,36 +309,116 @@ function resolveConnectorIdForRemoteToolName(
   return null;
 }
 
+function resolveConnectorIdFromRemoteToolMetadata(
+  remoteTool: Pick<RemoteTool, "name" | "_meta">,
+): string | null {
+  const meta = isRecord(remoteTool._meta) ? remoteTool._meta : undefined;
+  const connectorId =
+    typeof meta?.connector_id === "string" ? normalizeConnectorKey(meta.connector_id) : "";
+  if (connectorId) {
+    return connectorId;
+  }
+
+  const codexAppsMeta = isRecord(meta?._codex_apps) ? meta._codex_apps : undefined;
+  const resourceUri =
+    typeof codexAppsMeta?.resource_uri === "string" ? codexAppsMeta.resource_uri : "";
+  const resourceMatch = /^connectors:\/\/([^/]+)\/tools\//.exec(resourceUri);
+  if (!resourceMatch?.[1]) {
+    return null;
+  }
+
+  const normalized = normalizeConnectorKey(resourceMatch[1]);
+  return normalized || null;
+}
+
+function buildRemoteToolPrefixCounts(remoteTools: Pick<RemoteTool, "name">[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const remoteTool of remoteTools) {
+    const tokens = normalizeConnectorKey(remoteTool.name)
+      .split("_")
+      .filter((token) => token.length > 0);
+    for (let prefixLength = 1; prefixLength < tokens.length; prefixLength += 1) {
+      const prefix = tokens.slice(0, prefixLength).join("_");
+      counts.set(prefix, (counts.get(prefix) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
+function resolveConnectorIdFromRemoteToolNamePrefix(
+  remoteToolName: string,
+  prefixCounts: Map<string, number>,
+): string | null {
+  const tokens = normalizeConnectorKey(remoteToolName)
+    .split("_")
+    .filter((token) => token.length > 0);
+  let longestRepeatedPrefix: string | null = null;
+
+  for (let prefixLength = 1; prefixLength < tokens.length; prefixLength += 1) {
+    const prefix = tokens.slice(0, prefixLength).join("_");
+    if ((prefixCounts.get(prefix) ?? 0) >= 2) {
+      longestRepeatedPrefix = prefix;
+    }
+  }
+
+  return longestRepeatedPrefix ?? tokens[0] ?? null;
+}
+
+function buildConnectorConfigState(configuredConnectors: Record<string, { enabled: boolean }>): {
+  wildcardEnabled: boolean;
+  enabledConnectorIds: Set<string>;
+  disabledConnectorIds: Set<string>;
+} {
+  let wildcardEnabled = false;
+  const enabledConnectorIds = new Set<string>();
+  const disabledConnectorIds = new Set<string>();
+
+  for (const [connectorId, connector] of Object.entries(configuredConnectors)) {
+    const trimmedId = connectorId.trim();
+    if (!trimmedId) {
+      continue;
+    }
+    if (trimmedId === "*") {
+      wildcardEnabled = connector.enabled === true;
+      continue;
+    }
+    const normalized = normalizeConnectorKey(trimmedId);
+    if (!normalized) {
+      continue;
+    }
+    if (connector.enabled) {
+      enabledConnectorIds.add(normalized);
+      continue;
+    }
+    disabledConnectorIds.add(normalized);
+  }
+
+  return {
+    wildcardEnabled,
+    enabledConnectorIds,
+    disabledConnectorIds,
+  };
+}
+
 function buildAllowedConnectorIds(params: {
   inventory: AppInfo[];
   configuredConnectors: Record<string, { enabled: boolean }>;
 }): Set<string> {
-  const configuredConnectorIds = Object.entries(params.configuredConnectors)
-    .map(([connectorId, connector]) => ({
-      connectorId: normalizeConnectorKey(connectorId),
-      enabled: connector.enabled,
-    }))
-    .filter((entry) => entry.connectorId);
+  const { wildcardEnabled, enabledConnectorIds, disabledConnectorIds } = buildConnectorConfigState(
+    params.configuredConnectors,
+  );
 
   if (Object.keys(params.configuredConnectors).length > 0) {
     const allowed = new Set<string>();
-    const wildcardEnabled =
-      params.configuredConnectors["*"] && params.configuredConnectors["*"]?.enabled === true;
-    const enabledSet = new Set(
-      configuredConnectorIds.filter((entry) => entry.enabled).map((entry) => entry.connectorId),
-    );
-    const disabledSet = new Set(
-      configuredConnectorIds.filter((entry) => !entry.enabled).map((entry) => entry.connectorId),
-    );
     for (const app of params.inventory) {
       if (!app.isAccessible) {
         continue;
       }
       for (const connectorId of deriveConnectorKeysFromApp(app)) {
-        if (disabledSet.has(connectorId)) {
+        if (disabledConnectorIds.has(connectorId)) {
           continue;
         }
-        if (wildcardEnabled || enabledSet.has(connectorId)) {
+        if (wildcardEnabled || enabledConnectorIds.has(connectorId)) {
           allowed.add(connectorId);
         }
       }
@@ -360,17 +441,7 @@ function buildAllowedConnectorIds(params: {
 function buildConfiguredConnectorIds(
   configuredConnectors: Record<string, { enabled: boolean }>,
 ): Set<string> {
-  const enabled = new Set<string>();
-  for (const [connectorId, connector] of Object.entries(configuredConnectors)) {
-    const normalized = normalizeConnectorKey(connectorId);
-    if (!normalized || normalized === "*") {
-      continue;
-    }
-    if (connector.enabled) {
-      enabled.add(normalized);
-    }
-  }
-  return enabled;
+  return buildConnectorConfigState(configuredConnectors).enabledConnectorIds;
 }
 
 function buildRemoteToolConnectorMap(params: {
@@ -591,6 +662,25 @@ export class ChatgptAppsMcpBridge {
         snapshot,
       };
     }
+
+    const { wildcardEnabled } = buildConnectorConfigState(config.connectors);
+    if (wildcardEnabled) {
+      const refreshResult = await this.ensureFreshSnapshot({
+        loadOpenClawConfig: this.loadOpenClawConfig,
+        env: this.env,
+        workspaceDir: this.workspaceDir,
+        hardRefresh: this.consumeHardRefresh(),
+        refreshTimeoutMs: INITIAL_WILDCARD_REFRESH_TIMEOUT_MS,
+      });
+      if (refreshResult.status === "ok") {
+        return {
+          kind: "snapshot",
+          config: refreshResult.config,
+          snapshot: refreshResult.snapshot,
+        };
+      }
+    }
+
     return {
       kind: "degraded",
       config,
@@ -720,8 +810,9 @@ export class ChatgptAppsMcpBridge {
   ): Promise<BridgeToolCache> {
     const routes = new Map<string, BridgeRoute>();
     const tools: Tool[] = [];
-    const allowedConnectorIds = buildConfiguredConnectorIds(config.connectors);
-    if (allowedConnectorIds.size === 0) {
+    const { wildcardEnabled, enabledConnectorIds, disabledConnectorIds } =
+      buildConnectorConfigState(config.connectors);
+    if (!wildcardEnabled && enabledConnectorIds.size === 0) {
       return {
         snapshotKey: `degraded:${hashChatgptBaseUrl(config.chatgptBaseUrl)}:${hashChatgptAppsConfig(config)}`,
         tools,
@@ -730,9 +821,20 @@ export class ChatgptAppsMcpBridge {
     }
 
     const remoteTools = await this.listRemoteTools(config.chatgptBaseUrl);
+    const prefixCounts = buildRemoteToolPrefixCounts(remoteTools);
     for (const tool of remoteTools) {
-      const connectorId = resolveConnectorIdForRemoteToolName(tool.name, allowedConnectorIds);
+      const connectorId = wildcardEnabled
+        ? (resolveConnectorIdFromRemoteToolMetadata(tool) ??
+          resolveConnectorIdFromRemoteToolNamePrefix(tool.name, prefixCounts))
+        : (resolveConnectorIdForRemoteToolName(tool.name, enabledConnectorIds) ??
+          resolveConnectorIdFromRemoteToolMetadata(tool));
       if (!connectorId) {
+        continue;
+      }
+      if (disabledConnectorIds.has(connectorId)) {
+        continue;
+      }
+      if (!wildcardEnabled && !enabledConnectorIds.has(connectorId)) {
         continue;
       }
 

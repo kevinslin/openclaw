@@ -121,6 +121,9 @@ export function buildDerivedAppsConfig(config: ChatgptAppsConfig): DerivedAppsCo
   const wildcardEnabled = config.connectors["*"]?.enabled ?? false;
 
   for (const [connectorId, connector] of Object.entries(config.connectors)) {
+    if (connectorId === "*") {
+      continue;
+    }
     apps[connectorId] = {
       enabled: connector.enabled,
       // The app-server persists this structure via TOML-backed config writes.

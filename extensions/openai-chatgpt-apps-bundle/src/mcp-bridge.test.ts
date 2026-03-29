@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { ChatgptAppsMcpBridge } from "./mcp-bridge.js";
 import type { RemoteCodexAppsClientFactory } from "./remote-codex-apps-client.js";
+import type { PersistedConnectorSnapshot } from "./snapshot-cache.js";
 import { resolveChatgptAppsStatePaths } from "./state-paths.js";
 
 function createConfig(): OpenClawConfig {
@@ -28,7 +29,27 @@ function createConfig(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function createPersistedSnapshot() {
+function createWildcardConfig(): OpenClawConfig {
+  return {
+    plugins: {
+      entries: {
+        openai: {
+          config: {
+            chatgptApps: {
+              enabled: true,
+              chatgptBaseUrl: "https://chatgpt.com",
+              connectors: {
+                "*": { enabled: true },
+              },
+            },
+          },
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
+function createPersistedSnapshot(): PersistedConnectorSnapshot {
   return {
     version: 1,
     fetchedAt: "2026-03-29T18:00:00.000Z",
@@ -386,6 +407,199 @@ describe("ChatgptAppsMcpBridge", () => {
       }),
     ]);
     expect(listTools).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes all discoverable remote tools when wildcard enablement is active", async () => {
+    const remoteTools: Tool[] = [
+      {
+        name: "gmail_search_emails",
+        description: "Search Gmail",
+        _meta: {
+          connector_id: "gmail",
+        },
+        inputSchema: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+          },
+        },
+      },
+      {
+        name: "google_calendar_search_events",
+        description: "Search Calendar",
+        inputSchema: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+          },
+        },
+      },
+      {
+        name: "google_calendar_read_event",
+        description: "Read Calendar event",
+        inputSchema: {
+          type: "object",
+          properties: {
+            event_id: { type: "string" },
+          },
+        },
+      },
+      {
+        name: "linear_search_issues",
+        description: "Search Linear",
+        _meta: {
+          _codex_apps: {
+            resource_uri: "connectors://linear/tools/linear_search_issues",
+          },
+        },
+        inputSchema: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+          },
+        },
+      },
+    ];
+    const listTools = vi.fn(async () => ({
+      tools: remoteTools,
+    }));
+
+    const bridge = new ChatgptAppsMcpBridge({
+      loadOpenClawConfig: () => createWildcardConfig(),
+      ensureFreshSnapshot: async () => ({
+        status: "error",
+        reason: "refresh",
+        message: "Timed out refreshing ChatGPT apps snapshot",
+        config: {
+          enabled: true,
+          chatgptBaseUrl: "https://chatgpt.com",
+          appServer: { command: "codex", args: [] },
+          linking: {
+            enabled: false,
+            waitTimeoutMs: 60_000,
+            pollIntervalMs: 3_000,
+          },
+          connectors: {
+            "*": { enabled: true },
+          },
+        },
+        openclawConfig: createWildcardConfig(),
+        statePaths: resolveChatgptAppsStatePaths({
+          OPENCLAW_STATE_DIR: path.join(os.tmpdir(), "openclaw-chatgpt-apps-bridge"),
+          HOME: os.tmpdir(),
+        }),
+      }),
+      resolveProjectedAuth: async () => ({
+        status: "ok",
+        accessToken: "access-token",
+        accountId: "acct_123",
+        planType: null,
+        profileId: "openai-codex:default",
+        identity: { email: "user@example.com", profileName: "user@example.com" },
+      }),
+      remoteClientFactory: async () =>
+        ({
+          listTools,
+          callTool: async () => ({
+            content: [{ type: "text", text: "ok" }],
+          }),
+          close: async () => {},
+        }) satisfies Awaited<ReturnType<RemoteCodexAppsClientFactory>>,
+    });
+
+    await expect(bridge.listTools()).resolves.toEqual([
+      expect.objectContaining({
+        name: "chatgpt_app__gmail__gmail_search_emails",
+      }),
+      expect.objectContaining({
+        name: "chatgpt_app__google_calendar__google_calendar_search_events",
+      }),
+      expect.objectContaining({
+        name: "chatgpt_app__google_calendar__google_calendar_read_event",
+      }),
+      expect.objectContaining({
+        name: "chatgpt_app__linear__linear_search_issues",
+      }),
+    ]);
+    expect(listTools).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for an initial snapshot refresh before publishing wildcard tools", async () => {
+    const snapshot = createPersistedSnapshot();
+    snapshot.inventory[0] = {
+      ...snapshot.inventory[0],
+      id: "gmail",
+      name: "Gmail",
+      pluginDisplayNames: ["Gmail"],
+    };
+    snapshot.statuses[0] = {
+      ...snapshot.statuses[0],
+      name: "gmail",
+      tools: {
+        gmail_search_emails: {
+          name: "gmail_search_emails",
+          description: "Search Gmail",
+          _meta: {
+            connector_id: "gmail",
+          },
+          inputSchema: {
+            type: "object",
+            properties: {
+              query: { type: "string" },
+            },
+          },
+        },
+      },
+    } as PersistedConnectorSnapshot["statuses"][number];
+
+    const bridge = new ChatgptAppsMcpBridge({
+      loadOpenClawConfig: () => createWildcardConfig(),
+      ensureFreshSnapshot: async () => ({
+        status: "ok",
+        source: "refresh",
+        snapshot,
+        config: {
+          enabled: true,
+          chatgptBaseUrl: "https://chatgpt.com",
+          appServer: { command: "codex", args: [] },
+          linking: {
+            enabled: false,
+            waitTimeoutMs: 60_000,
+            pollIntervalMs: 3_000,
+          },
+          connectors: {
+            "*": { enabled: true },
+          },
+        },
+        openclawConfig: createWildcardConfig(),
+        statePaths: resolveChatgptAppsStatePaths({
+          OPENCLAW_STATE_DIR: path.join(os.tmpdir(), "openclaw-chatgpt-apps-bridge"),
+          HOME: os.tmpdir(),
+        }),
+      }),
+      resolveProjectedAuth: async () => ({
+        status: "ok",
+        accessToken: "access-token",
+        accountId: "acct_123",
+        planType: null,
+        profileId: "openai-codex:default",
+        identity: { email: "user@example.com", profileName: "user@example.com" },
+      }),
+      remoteClientFactory: async () =>
+        ({
+          listTools: async () => ({ tools: [] }),
+          callTool: async () => ({
+            content: [{ type: "text", text: "ok" }],
+          }),
+          close: async () => {},
+        }) satisfies Awaited<ReturnType<RemoteCodexAppsClientFactory>>,
+    });
+
+    await expect(bridge.listTools()).resolves.toEqual([
+      expect.objectContaining({
+        name: "chatgpt_app__gmail__gmail_search_emails",
+      }),
+    ]);
   });
 
   it("does not block tools/list on background snapshot refresh", async () => {

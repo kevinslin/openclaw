@@ -75,11 +75,6 @@ describe("buildDerivedAppsConfig", () => {
         destructive_enabled: false,
         open_world_enabled: false,
       },
-      "*": {
-        enabled: true,
-        destructive_enabled: false,
-        open_world_enabled: false,
-      },
       slack: {
         enabled: false,
         destructive_enabled: false,
