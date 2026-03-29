@@ -14,6 +14,8 @@ import {
 } from "./snapshot-cache.js";
 import { resolveChatgptAppsStatePaths, type ChatgptAppsStatePaths } from "./state-paths.js";
 
+const REFRESH_TIMEOUT_MS = 10_000;
+
 export type EnsureFreshSnapshotResult =
   | {
       status: "ok";
@@ -51,6 +53,7 @@ export async function ensureFreshSnapshot(params: {
     now?: () => number;
   }) => Promise<AppServerRefreshCapture>;
   statePaths?: ChatgptAppsStatePaths;
+  refreshTimeoutMs?: number;
 }): Promise<EnsureFreshSnapshotResult> {
   const env = params.env ?? process.env;
   const now = params.now ?? Date.now;
@@ -153,18 +156,25 @@ export async function ensureFreshSnapshot(params: {
       }));
 
   try {
-    const capture = await captureSnapshot({
-      config,
-      statePaths,
-      workspaceDir: params.workspaceDir,
-      env,
-      resolveProjectedAuth: async () =>
-        await resolveProjectedAuth({
-          config: openclawConfig,
-          agentDir: env.OPENCLAW_AGENT_DIR,
-        }),
-      now,
-    });
+    const capture = await Promise.race([
+      captureSnapshot({
+        config,
+        statePaths,
+        workspaceDir: params.workspaceDir,
+        env,
+        resolveProjectedAuth: async () =>
+          await resolveProjectedAuth({
+            config: openclawConfig,
+            agentDir: env.OPENCLAW_AGENT_DIR,
+          }),
+        now,
+      }),
+      new Promise<AppServerRefreshCapture>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error("Timed out refreshing ChatGPT apps snapshot"));
+        }, params.refreshTimeoutMs ?? REFRESH_TIMEOUT_MS);
+      }),
+    ]);
     const nextSnapshot: PersistedConnectorSnapshot = {
       version: SNAPSHOT_VERSION,
       fetchedAt: new Date(now()).toISOString(),

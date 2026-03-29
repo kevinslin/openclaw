@@ -10,13 +10,19 @@ import {
 import type { protocol } from "codex-sdk-ts";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveChatgptAppsProjectedAuth } from "./auth-projector.js";
+import { hashChatgptAppsConfig, hashChatgptBaseUrl, resolveChatgptAppsConfig } from "./config.js";
 import { ensureFreshSnapshot, type EnsureFreshSnapshotResult } from "./refresh-snapshot.js";
 import {
   createRemoteCodexAppsClient,
   type RemoteCodexAppsClient,
   type RemoteCodexAppsClientFactory,
 } from "./remote-codex-apps-client.js";
-import { computeSnapshotKey, type PersistedConnectorSnapshot } from "./snapshot-cache.js";
+import {
+  computeSnapshotKey,
+  readPersistedSnapshot,
+  type PersistedConnectorSnapshot,
+} from "./snapshot-cache.js";
+import { resolveChatgptAppsStatePaths } from "./state-paths.js";
 
 type AppInfo = protocol.v2.AppInfo;
 type McpServerStatus = protocol.v2.McpServerStatus;
@@ -36,6 +42,17 @@ type BridgeToolCache = {
   tools: Tool[];
   routes: Map<string, BridgeRoute>;
 };
+
+type PublicationState =
+  | {
+      kind: "snapshot";
+      config: ReturnType<typeof resolveChatgptAppsConfig>;
+      snapshot: PersistedConnectorSnapshot;
+    }
+  | {
+      kind: "degraded";
+      config: ReturnType<typeof resolveChatgptAppsConfig>;
+    };
 
 type McpToolSchema = Tool["inputSchema"] & Record<string, unknown>;
 
@@ -315,6 +332,22 @@ function buildAllowedConnectorIds(params: {
   return allowed;
 }
 
+function buildConfiguredConnectorIds(
+  configuredConnectors: Record<string, { enabled: boolean }>,
+): Set<string> {
+  const enabled = new Set<string>();
+  for (const [connectorId, connector] of Object.entries(configuredConnectors)) {
+    const normalized = normalizeConnectorKey(connectorId);
+    if (!normalized || normalized === "*") {
+      continue;
+    }
+    if (connector.enabled) {
+      enabled.add(normalized);
+    }
+  }
+  return enabled;
+}
+
 function buildRemoteToolConnectorMap(params: {
   statuses: McpServerStatus[];
   allowedConnectorIds: Set<string>;
@@ -395,6 +428,7 @@ export class ChatgptAppsMcpBridge {
   private remoteClientPromise: Promise<RemoteCodexAppsClient> | null = null;
   private toolCache: BridgeToolCache | null = null;
   private toolCachePromise: Promise<BridgeToolCache> | null = null;
+  private backgroundRefreshPromise: Promise<void> | null = null;
 
   constructor(params: {
     loadOpenClawConfig: () => OpenClawConfig;
@@ -462,11 +496,9 @@ export class ChatgptAppsMcpBridge {
   }
 
   async listTools(): Promise<Tool[]> {
-    const snapshotResult = await this.getSnapshotResult();
-    if (snapshotResult.status !== "ok") {
-      return [];
-    }
-    const cache = await this.getToolCache(snapshotResult);
+    const publicationState = await this.getPublicationState();
+    this.scheduleBackgroundRefresh();
+    const cache = await this.getToolCache(publicationState);
     return cache.tools;
   }
 
@@ -475,29 +507,20 @@ export class ChatgptAppsMcpBridge {
     args: Record<string, unknown> | undefined,
     meta?: Record<string, unknown>,
   ): Promise<CallToolResult> {
-    const snapshotResult = await this.getSnapshotResult();
-    if (snapshotResult.status !== "ok") {
-      throw new Error(snapshotResult.message);
-    }
-
-    let cache = await this.getToolCache(snapshotResult);
+    const publicationState = await this.getPublicationState();
+    this.scheduleBackgroundRefresh();
+    let cache = await this.getToolCache(publicationState);
     let route = cache.routes.get(name);
     if (!route) {
       this.invalidateToolCache();
-      cache = await this.getToolCache(snapshotResult);
+      cache = await this.getToolCache({
+        kind: "degraded",
+        config: publicationState.config,
+      });
       route = cache.routes.get(name);
     }
     if (!route) {
       throw new Error(`Unknown ChatGPT app tool: ${name}`);
-    }
-
-    const authResult = await this.ensureFreshSnapshot({
-      loadOpenClawConfig: this.loadOpenClawConfig,
-      env: this.env,
-      workspaceDir: this.workspaceDir,
-    });
-    if (authResult.status !== "ok") {
-      throw new Error(authResult.message);
     }
 
     const auth = await this.resolveProjectedAuth({
@@ -511,7 +534,7 @@ export class ChatgptAppsMcpBridge {
     const remoteClient = await this.getRemoteClient({
       accessToken: auth.accessToken,
       accountId: auth.accountId,
-      chatgptBaseUrl: authResult.config.chatgptBaseUrl,
+      chatgptBaseUrl: publicationState.config.chatgptBaseUrl,
     });
     return await remoteClient.callTool({
       name: route.remoteName,
@@ -531,22 +554,22 @@ export class ChatgptAppsMcpBridge {
     this.toolCachePromise = null;
   }
 
-  private async getSnapshotResult(): Promise<EnsureFreshSnapshotResult> {
-    const result = await this.ensureFreshSnapshot({
-      loadOpenClawConfig: this.loadOpenClawConfig,
-      env: this.env,
-      workspaceDir: this.workspaceDir,
-      hardRefresh: this.consumeHardRefresh(),
-    });
-    if (result.status === "ok") {
-      const snapshotKey = computeSnapshotKey(result.snapshot);
-      if (this.toolCache && this.toolCache.snapshotKey !== snapshotKey) {
-        this.invalidateToolCache();
-      }
-    } else {
-      this.invalidateToolCache();
+  private async getPublicationState(): Promise<PublicationState> {
+    const openclawConfig = this.loadOpenClawConfig();
+    const config = resolveChatgptAppsConfig(openclawConfig.plugins?.entries?.openai?.config ?? {});
+    const statePaths = resolveChatgptAppsStatePaths(this.env);
+    const snapshot = await readPersistedSnapshot(statePaths.snapshotPath);
+    if (snapshot) {
+      return {
+        kind: "snapshot",
+        config,
+        snapshot,
+      };
     }
-    return result;
+    return {
+      kind: "degraded",
+      config,
+    };
   }
 
   private async getRemoteClient(params: {
@@ -586,19 +609,21 @@ export class ChatgptAppsMcpBridge {
     }
   }
 
-  private async getToolCache(
-    snapshotResult: Extract<EnsureFreshSnapshotResult, { status: "ok" }>,
-  ): Promise<BridgeToolCache> {
-    const snapshotKey = computeSnapshotKey(snapshotResult.snapshot);
+  private async getToolCache(publicationState: PublicationState): Promise<BridgeToolCache> {
+    const snapshotKey =
+      publicationState.kind === "snapshot"
+        ? `snapshot:${computeSnapshotKey(publicationState.snapshot)}:${hashChatgptAppsConfig(publicationState.config)}`
+        : `degraded:${hashChatgptBaseUrl(publicationState.config.chatgptBaseUrl)}:${hashChatgptAppsConfig(publicationState.config)}`;
     if (this.toolCache?.snapshotKey === snapshotKey) {
       return this.toolCache;
     }
     if (this.toolCachePromise) {
       return await this.toolCachePromise;
     }
-    this.toolCachePromise = Promise.resolve(
-      this.buildToolCache(snapshotResult.snapshot, snapshotResult.config.connectors),
-    );
+    this.toolCachePromise =
+      publicationState.kind === "snapshot"
+        ? this.buildToolCacheFromSnapshot(publicationState.snapshot, publicationState.config)
+        : this.buildDegradedToolCache(publicationState.config);
     try {
       this.toolCache = await this.toolCachePromise;
       return this.toolCache;
@@ -607,17 +632,14 @@ export class ChatgptAppsMcpBridge {
     }
   }
 
-  private buildToolCache(
+  private async buildToolCacheFromSnapshot(
     snapshot: PersistedConnectorSnapshot,
-    configuredConnectors: Record<string, { enabled: boolean }>,
-  ): BridgeToolCache {
+    config: ReturnType<typeof resolveChatgptAppsConfig>,
+  ): Promise<BridgeToolCache> {
+    const configuredConnectors = config.connectors;
     const allowedConnectorIds = buildAllowedConnectorIds({
       inventory: snapshot.inventory,
       configuredConnectors,
-    });
-    const remoteToolConnectorMap = buildRemoteToolConnectorMap({
-      statuses: snapshot.statuses,
-      allowedConnectorIds,
     });
     const routes = new Map<string, BridgeRoute>();
     const tools: Tool[] = [];
@@ -630,12 +652,23 @@ export class ChatgptAppsMcpBridge {
       };
     }
 
-    const remoteTools = snapshot.statuses.flatMap((status) =>
-      Object.entries(status.tools ?? {}).flatMap(([, tool]) => (tool ? [tool as RemoteTool] : [])),
-    );
+    const remoteTools =
+      snapshot.statuses.length > 0
+        ? snapshot.statuses.flatMap((status) =>
+            Object.entries(status.tools ?? {}).flatMap(([, tool]) =>
+              tool ? [tool as RemoteTool] : [],
+            ),
+          )
+        : await this.listRemoteTools(config.chatgptBaseUrl);
+    const remoteToolConnectorMap = buildRemoteToolConnectorMap({
+      statuses: snapshot.statuses,
+      allowedConnectorIds,
+    });
 
     for (const tool of remoteTools) {
-      const connectorId = remoteToolConnectorMap.get(tool.name);
+      const connectorId =
+        remoteToolConnectorMap.get(tool.name) ??
+        resolveConnectorIdForRemoteToolName(tool.name, allowedConnectorIds);
       if (!connectorId) {
         continue;
       }
@@ -651,10 +684,100 @@ export class ChatgptAppsMcpBridge {
     }
 
     return {
-      snapshotKey: computeSnapshotKey(snapshot),
+      snapshotKey: `snapshot:${computeSnapshotKey(snapshot)}:${hashChatgptAppsConfig(config)}`,
       tools,
       routes,
     };
+  }
+
+  private async buildDegradedToolCache(
+    config: EnsureFreshSnapshotResult["config"],
+  ): Promise<BridgeToolCache> {
+    const routes = new Map<string, BridgeRoute>();
+    const tools: Tool[] = [];
+    const allowedConnectorIds = buildConfiguredConnectorIds(config.connectors);
+    if (allowedConnectorIds.size === 0) {
+      return {
+        snapshotKey: `degraded:${hashChatgptBaseUrl(config.chatgptBaseUrl)}:${hashChatgptAppsConfig(config)}`,
+        tools,
+        routes,
+      };
+    }
+
+    const remoteTools = await this.listRemoteTools(config.chatgptBaseUrl);
+    for (const tool of remoteTools) {
+      const connectorId = resolveConnectorIdForRemoteToolName(tool.name, allowedConnectorIds);
+      if (!connectorId) {
+        continue;
+      }
+
+      const route = {
+        connectorId,
+        remoteName: tool.name,
+        remoteMeta: isRecord(tool._meta) ? { ...tool._meta } : undefined,
+      };
+      const rewritten = withRoutingMetadata(tool, route);
+      tools.push(rewritten);
+      routes.set(rewritten.name, route);
+    }
+
+    return {
+      snapshotKey: `degraded:${hashChatgptBaseUrl(config.chatgptBaseUrl)}:${hashChatgptAppsConfig(config)}`,
+      tools,
+      routes,
+    };
+  }
+
+  private async listRemoteTools(chatgptBaseUrl: string): Promise<RemoteTool[]> {
+    const auth = await this.resolveProjectedAuth({
+      config: this.loadOpenClawConfig(),
+      agentDir: this.env.OPENCLAW_AGENT_DIR,
+    });
+    if (auth.status !== "ok") {
+      return [];
+    }
+
+    const remoteClient = await this.getRemoteClient({
+      accessToken: auth.accessToken,
+      accountId: auth.accountId,
+      chatgptBaseUrl,
+    });
+
+    const tools: RemoteTool[] = [];
+    let cursor: string | undefined;
+    do {
+      const response = await remoteClient.listTools(cursor ? { cursor } : undefined);
+      tools.push(...response.tools.map((tool) => tool as RemoteTool));
+      cursor = response.nextCursor;
+    } while (cursor);
+
+    return tools;
+  }
+
+  private scheduleBackgroundRefresh(): void {
+    if (this.backgroundRefreshPromise) {
+      return;
+    }
+
+    const hardRefresh = this.consumeHardRefresh();
+    this.backgroundRefreshPromise = (async () => {
+      const result = await this.ensureFreshSnapshot({
+        loadOpenClawConfig: this.loadOpenClawConfig,
+        env: this.env,
+        workspaceDir: this.workspaceDir,
+        hardRefresh,
+      });
+      if (result.status === "ok") {
+        const nextSnapshotKey = `snapshot:${computeSnapshotKey(result.snapshot)}:${hashChatgptAppsConfig(result.config)}`;
+        if (this.toolCache && this.toolCache.snapshotKey !== nextSnapshotKey) {
+          this.invalidateToolCache();
+        }
+      }
+    })()
+      .catch(() => {})
+      .finally(() => {
+        this.backgroundRefreshPromise = null;
+      });
   }
 }
 

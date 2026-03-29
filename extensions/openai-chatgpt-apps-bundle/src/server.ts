@@ -4,6 +4,13 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { runChatgptAppsMcpBridgeStdio } from "./mcp-bridge.js";
 
+function writeDebugLog(env: NodeJS.ProcessEnv, message: string): void {
+  if (env.OPENCLAW_CHATGPT_APPS_DEBUG !== "1") {
+    return;
+  }
+  process.stderr.write(`[openai-chatgpt-apps] ${message}\n`);
+}
+
 function hasHardRefreshFlag(argv: string[], env: NodeJS.ProcessEnv): boolean {
   return argv.includes("--hard-refresh") || env.OPENCLAW_CHATGPT_APPS_HARD_REFRESH === "1";
 }
@@ -32,12 +39,15 @@ async function loadRawConfig(env: NodeJS.ProcessEnv): Promise<OpenClawConfig> {
 }
 
 async function main(): Promise<void> {
+  writeDebugLog(process.env, "server main start");
   const config = await loadRawConfig(process.env);
+  writeDebugLog(process.env, "config loaded");
   await runChatgptAppsMcpBridgeStdio({
     loadOpenClawConfig: () => config,
     env: process.env,
     hardRefresh: hasHardRefreshFlag(process.argv.slice(2), process.env),
   });
+  writeDebugLog(process.env, "bridge connected");
 }
 
 void main().catch((error) => {

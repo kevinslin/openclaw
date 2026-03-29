@@ -20,6 +20,8 @@ type LoginAccountParams = protocol.v2.LoginAccountParams;
 type LoginAccountResponse = protocol.v2.LoginAccountResponse;
 type McpServerStatus = protocol.v2.McpServerStatus;
 
+const MCP_SERVER_STATUS_TIMEOUT_MS = 5_000;
+
 export type AppServerRefreshCapture = {
   inventory: AppInfo[];
   statuses: McpServerStatus[];
@@ -96,14 +98,35 @@ export async function captureAppServerSnapshot(params: {
   });
   const clientFactory =
     params.clientFactory ??
-    (async (factoryParams) =>
-      await CodexAppServerClient.spawn({
+    (async (factoryParams) => {
+      const client = await CodexAppServerClient.spawn({
         bin: factoryParams.command,
         args: factoryParams.args,
         cwd: factoryParams.cwd,
         env: factoryParams.env,
         analyticsDefaultEnabled: true,
-      }));
+      });
+      return {
+        initializeSession: () => client.initializeSession(),
+        handleChatgptAuthTokensRefresh: (handler) =>
+          client.handleChatgptAuthTokensRefresh(async () => {
+            const response = await handler();
+            return {
+              ...response,
+              chatgptPlanType: response.chatgptPlanType ?? null,
+            };
+          }),
+        loginAccount: (loginParams) => client.loginAccount(loginParams),
+        readAccount: (readParams) => client.readAccount(readParams),
+        getAuthStatus: (statusParams) => client.getAuthStatus(statusParams),
+        listApps: (listParams) => client.listApps(listParams),
+        listMcpServerStatus: (listParams) => client.listMcpServerStatus(listParams),
+        writeConfigValue: (writeParams) => client.writeConfigValue(writeParams),
+        close: async () => {
+          await client.close();
+        },
+      } satisfies ChatgptAppsRpcClient;
+    });
   const client = await clientFactory({
     command: resolvedCommand,
     args: params.config.appServer.args,
@@ -148,15 +171,7 @@ export async function captureAppServerSnapshot(params: {
       appCursor = response.nextCursor;
     } while (appCursor);
 
-    const statuses: McpServerStatus[] = [];
-    let statusCursor: string | null = null;
-    do {
-      const response: ListMcpServerStatusResponse = await client.listMcpServerStatus({
-        cursor: statusCursor,
-      });
-      statuses.push(...response.data);
-      statusCursor = response.nextCursor;
-    } while (statusCursor);
+    const statuses = await listMcpServerStatusesBestEffort(client);
 
     const [accountResponse, authStatus] = await Promise.all([
       client.readAccount({ refreshToken: false }),
@@ -173,5 +188,37 @@ export async function captureAppServerSnapshot(params: {
   } finally {
     unsubscribe?.();
     await client.close();
+  }
+}
+
+async function listMcpServerStatusesBestEffort(
+  client: ChatgptAppsRpcClient,
+): Promise<McpServerStatus[]> {
+  const listStatuses = async (): Promise<McpServerStatus[]> => {
+    const statuses: McpServerStatus[] = [];
+    let statusCursor: string | null = null;
+    do {
+      const response: ListMcpServerStatusResponse = await client.listMcpServerStatus({
+        cursor: statusCursor,
+      });
+      statuses.push(...response.data);
+      statusCursor = response.nextCursor;
+    } while (statusCursor);
+    return statuses;
+  };
+
+  try {
+    return await Promise.race([
+      listStatuses(),
+      new Promise<McpServerStatus[]>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error("Timed out reading mcpServerStatus/list"));
+        }, MCP_SERVER_STATUS_TIMEOUT_MS);
+      }),
+    ]);
+  } catch {
+    // Tool publication can fall back to the remote apps endpoint when the local
+    // status snapshot is unavailable. Keep inventory refresh successful.
+    return [];
   }
 }

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
+import { validateConfigObjectWithPlugins } from "../../src/config/config.js";
 
 describe("openai plugin manifest chatgpt apps schema", () => {
   it("declares the chatgptApps config surface", () => {
@@ -69,5 +70,31 @@ describe("openai plugin manifest chatgpt apps schema", () => {
         },
       },
     });
+  });
+
+  it("accepts chatgptApps config through plugin config validation", () => {
+    const result = validateConfigObjectWithPlugins({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        entries: {
+          openai: {
+            enabled: true,
+            config: {
+              chatgptApps: {
+                enabled: true,
+                chatgptBaseUrl: "https://chat.openai.com",
+                connectors: {
+                  gmail: {
+                    enabled: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
   });
 });

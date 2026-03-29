@@ -223,4 +223,33 @@ describe("ensureFreshSnapshot", () => {
     const snapshot = await readPersistedSnapshot(statePaths.snapshotPath);
     expect(snapshot?.accountId).toBe("acct_123");
   });
+
+  it("times out hung refresh captures instead of blocking indefinitely", async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chatgpt-apps-"));
+    const env = {
+      OPENCLAW_STATE_DIR: tempRoot,
+      HOME: tempRoot,
+    };
+
+    const result = await ensureFreshSnapshot({
+      loadOpenClawConfig: () => createConfig(),
+      env,
+      refreshTimeoutMs: 5,
+      resolveProjectedAuth: async () => ({
+        status: "ok",
+        accessToken: "access-token",
+        accountId: "acct_123",
+        planType: null,
+        profileId: "openai-codex:default",
+        identity: { email: "user@example.com", profileName: "user@example.com" },
+      }),
+      captureSnapshot: async () => await new Promise<AppServerRefreshCapture>(() => {}),
+    });
+
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "refresh",
+      message: "Timed out refreshing ChatGPT apps snapshot",
+    });
+  });
 });
