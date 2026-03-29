@@ -6,11 +6,19 @@ import {
   type CallToolResult,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
 
 const REMOTE_CLIENT_INFO = {
   name: "openclaw-chatgpt-apps-bridge",
   version: "0.1.0",
 } as const;
+
+const RawListToolsResultSchema = z
+  .object({
+    tools: z.array(z.unknown()),
+    nextCursor: z.string().optional(),
+  })
+  .passthrough();
 
 export type RemoteCodexAppsAuth = {
   accessToken: string;
@@ -93,11 +101,15 @@ export const createRemoteCodexAppsClient: RemoteCodexAppsClientFactory = async (
 
   return {
     listTools: async (listParams = {}) => {
-      const result = await client.listTools(
-        listParams.cursor ? { cursor: listParams.cursor } : undefined,
+      const result = await client.request(
+        {
+          method: "tools/list",
+          params: listParams.cursor ? { cursor: listParams.cursor } : {},
+        },
+        RawListToolsResultSchema,
       );
       return {
-        tools: result.tools,
+        tools: result.tools as Tool[],
         nextCursor: result.nextCursor ?? undefined,
       };
     },

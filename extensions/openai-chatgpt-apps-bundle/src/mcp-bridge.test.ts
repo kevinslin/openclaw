@@ -438,4 +438,106 @@ describe("ChatgptAppsMcpBridge", () => {
     ]);
     expect(listTools).toHaveBeenCalledTimes(1);
   });
+
+  it("sanitizes nested anyOf branches inside remote tool schemas", async () => {
+    const listTools = vi.fn(async () => ({
+      tools: [
+        {
+          name: "slack_send",
+          description: "Send to Slack",
+          _meta: {
+            connector_id: "slack",
+          },
+          inputSchema: {
+            type: "object",
+            properties: {
+              filters: {
+                $defs: {
+                  filterValue: {
+                    anyOf: [
+                      {
+                        type: "string",
+                      },
+                      {
+                        type: "null",
+                      },
+                    ],
+                  },
+                },
+                type: "object",
+                properties: {
+                  query: {
+                    $ref: "#/$defs/filterValue",
+                  },
+                },
+              },
+            },
+          },
+        },
+      ] satisfies Tool[],
+    }));
+
+    const bridge = new ChatgptAppsMcpBridge({
+      loadOpenClawConfig: () => createConfig(),
+      ensureFreshSnapshot: async () => ({
+        status: "error",
+        reason: "refresh",
+        message: "Timed out refreshing ChatGPT apps snapshot",
+        config: {
+          enabled: true,
+          chatgptBaseUrl: "https://chatgpt.com",
+          appServer: { command: "codex", args: [] },
+          linking: {
+            enabled: false,
+            waitTimeoutMs: 60_000,
+            pollIntervalMs: 3_000,
+          },
+          connectors: {
+            slack: { enabled: true },
+          },
+        },
+        openclawConfig: createConfig(),
+        statePaths: resolveChatgptAppsStatePaths({
+          OPENCLAW_STATE_DIR: path.join(os.tmpdir(), "openclaw-chatgpt-apps-bridge"),
+          HOME: os.tmpdir(),
+        }),
+      }),
+      resolveProjectedAuth: async () => ({
+        status: "ok",
+        accessToken: "access-token",
+        accountId: "acct_123",
+        planType: null,
+        profileId: "openai-codex:default",
+        identity: { email: "user@example.com", profileName: "user@example.com" },
+      }),
+      remoteClientFactory: async () => ({
+        listTools,
+        callTool: async () => ({
+          content: [{ type: "text", text: "ok" }],
+        }),
+        close: async () => {},
+      }),
+    });
+
+    const tools = await bridge.listTools();
+    expect(tools).toHaveLength(1);
+    expect(tools[0]?.inputSchema).toEqual({
+      type: "object",
+      properties: {
+        filters: {
+          $defs: {
+            filterValue: {
+              type: "string",
+            },
+          },
+          type: "object",
+          properties: {
+            query: {
+              $ref: "#/$defs/filterValue",
+            },
+          },
+        },
+      },
+    });
+  });
 });

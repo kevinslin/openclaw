@@ -103,22 +103,9 @@ function sanitizeJsonSchemaNode(value: unknown): unknown {
     }
   }
 
-  const sanitized: Record<string, unknown> = { ...value };
-
-  if (isRecord(sanitized.properties)) {
-    sanitized.properties = Object.fromEntries(
-      Object.entries(sanitized.properties).map(([key, child]) => [
-        key,
-        sanitizeJsonSchemaNode(child),
-      ]),
-    );
-  }
-  if ("items" in sanitized) {
-    sanitized.items = sanitizeJsonSchemaNode(sanitized.items);
-  }
-  if (isRecord(sanitized.additionalProperties)) {
-    sanitized.additionalProperties = sanitizeJsonSchemaNode(sanitized.additionalProperties);
-  }
+  const sanitized: Record<string, unknown> = Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [key, sanitizeJsonSchemaNode(entry)]),
+  );
 
   if (sanitized.default === null) {
     delete sanitized.default;
@@ -170,12 +157,50 @@ function sanitizeToolSchema(inputSchema: unknown): McpToolSchema {
     ? sanitized.required.filter((entry): entry is string => typeof entry === "string")
     : undefined;
 
-  return {
+  const normalizedSchema = {
     ...sanitized,
     type: "object",
     ...(properties ? { properties } : {}),
     ...(required ? { required } : {}),
   } as McpToolSchema;
+
+  if (!isValidSanitizedJsonSchemaNode(normalizedSchema)) {
+    return {
+      type: "object",
+      additionalProperties: true,
+    } as McpToolSchema;
+  }
+
+  return normalizedSchema;
+}
+
+function isValidSanitizedJsonSchemaNode(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.every((entry) => isValidSanitizedJsonSchemaNode(entry));
+  }
+
+  if (!isRecord(value)) {
+    return true;
+  }
+
+  for (const combinator of ["anyOf", "oneOf", "allOf"] as const) {
+    if (combinator in value) {
+      return false;
+    }
+  }
+
+  if ("type" in value) {
+    const schemaType = value.type;
+    const validType =
+      (typeof schemaType === "string" && JSON_SCHEMA_TYPES.has(schemaType)) ||
+      (Array.isArray(schemaType) &&
+        schemaType.every((entry) => typeof entry === "string" && JSON_SCHEMA_TYPES.has(entry)));
+    if (!validType) {
+      return false;
+    }
+  }
+
+  return Object.values(value).every((entry) => isValidSanitizedJsonSchemaNode(entry));
 }
 
 function sanitizeToolAnnotations(annotations: unknown): Tool["annotations"] | undefined {
