@@ -6,7 +6,7 @@ import {
 } from "./config.js";
 
 describe("resolveChatgptAppsConfig", () => {
-  it("applies defaults when chatgpt apps config is absent", () => {
+  it("applies defaults when openai-apps config is absent", () => {
     expect(resolveChatgptAppsConfig({})).toEqual({
       enabled: false,
       chatgptBaseUrl: "https://chatgpt.com",
@@ -25,18 +25,16 @@ describe("resolveChatgptAppsConfig", () => {
 
   it("normalizes app-server args and connector flags", () => {
     const config = resolveChatgptAppsConfig({
-      chatgptApps: {
-        enabled: true,
-        appServer: {
-          command: "codex-dev",
-          args: ["app-server", "--analytics-default-enabled", "--foo"],
+      enabled: true,
+      appServer: {
+        command: "codex-dev",
+        args: ["app-server", "--analytics-default-enabled", "--foo"],
+      },
+      connectors: {
+        Slack: {
+          enabled: false,
         },
-        connectors: {
-          Slack: {
-            enabled: false,
-          },
-          Gmail: {},
-        },
+        Gmail: {},
       },
     });
 
@@ -110,16 +108,12 @@ describe("buildDerivedAppsConfig", () => {
 
   it("hashes identical normalized configs stably", () => {
     const first = resolveChatgptAppsConfig({
-      chatgptApps: {
-        enabled: true,
-        connectors: { slack: { enabled: true } },
-      },
+      enabled: true,
+      connectors: { slack: { enabled: true } },
     });
     const second = resolveChatgptAppsConfig({
-      chatgptApps: {
-        enabled: true,
-        connectors: { slack: {} },
-      },
+      enabled: true,
+      connectors: { slack: {} },
     });
 
     expect(hashChatgptAppsConfig(first)).toBe(hashChatgptAppsConfig(second));

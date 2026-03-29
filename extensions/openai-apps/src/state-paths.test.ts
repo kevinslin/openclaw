@@ -16,4 +16,15 @@ describe("resolveChatgptAppsStatePaths", () => {
     expect(paths.derivedConfigPath).toBe(path.join(paths.rootDir, "codex-apps.config.json"));
     expect(paths.refreshDebugPath).toBe(path.join(paths.rootDir, "refresh-debug.json"));
   });
+
+  it("falls back to the owning agent state root when OPENCLAW_STATE_DIR is unset", () => {
+    const paths = resolveChatgptAppsStatePaths({
+      OPENCLAW_AGENT_DIR: "/tmp/openclaw-dev/agents/dev/agent",
+      HOME: "/tmp/home",
+    });
+
+    expect(paths.rootDir).toBe(
+      path.join("/tmp/openclaw-dev", "plugin-runtimes", CHATGPT_APPS_RUNTIME_ID),
+    );
+  });
 });

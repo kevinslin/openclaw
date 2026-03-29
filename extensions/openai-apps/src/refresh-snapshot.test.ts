@@ -12,13 +12,11 @@ function createConfig(connectors?: Record<string, { enabled: boolean }>): OpenCl
   return {
     plugins: {
       entries: {
-        openai: {
+        "openai-apps": {
           config: {
-            chatgptApps: {
-              enabled: true,
-              chatgptBaseUrl: "https://chatgpt.com",
-              connectors: connectors ?? {},
-            },
+            enabled: true,
+            chatgptBaseUrl: "https://chatgpt.com",
+            connectors: connectors ?? {},
           },
         },
       },
@@ -87,7 +85,7 @@ afterEach(async () => {
 
 describe("ensureFreshSnapshot", () => {
   it("refreshes once and reuses the cached snapshot while it is fresh", async () => {
-    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chatgpt-apps-"));
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openai-apps-"));
     const env = {
       OPENCLAW_STATE_DIR: tempRoot,
       HOME: tempRoot,

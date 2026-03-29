@@ -1,0 +1,4 @@
+{
+  "name": "OpenAI Apps",
+  "description": "Expose OpenAI apps through a bundle-owned MCP bridge."
+}

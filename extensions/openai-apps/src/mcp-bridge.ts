@@ -28,7 +28,7 @@ type AppInfo = protocol.v2.AppInfo;
 type McpServerStatus = protocol.v2.McpServerStatus;
 type RemoteTool = protocol.Tool;
 
-export const MCP_SERVER_NAME = "openai-chatgpt-apps";
+export const MCP_SERVER_NAME = "openai-apps";
 const ROUTING_META_KEY = "openclaw/chatgpt-apps";
 const INITIAL_WILDCARD_REFRESH_TIMEOUT_MS = 20_000;
 
@@ -94,6 +94,11 @@ const JSON_SCHEMA_RESERVED_KEYWORDS = new Set([
   "required",
   "title",
   "type",
+]);
+const EXCLUDED_CONNECTOR_IDS = new Set([
+  "collab",
+  "connector_openai_general_agent",
+  "general_agent",
 ]);
 
 function sanitizeJsonSchemaNode(value: unknown): unknown {
@@ -234,6 +239,13 @@ function sanitizeToolSchema(inputSchema: unknown): McpToolSchema {
   }
 
   return normalizedSchema;
+}
+
+function shouldExcludeConnectorId(connectorId: string | null | undefined): boolean {
+  if (!connectorId) {
+    return false;
+  }
+  return EXCLUDED_CONNECTOR_IDS.has(normalizeConnectorKey(connectorId));
 }
 
 function isValidSanitizedJsonSchemaNode(value: unknown): boolean {
@@ -485,6 +497,9 @@ function buildAllowedConnectorIds(params: {
         continue;
       }
       for (const connectorId of deriveConnectorKeysFromApp(app)) {
+        if (shouldExcludeConnectorId(connectorId)) {
+          continue;
+        }
         if (disabledConnectorIds.has(connectorId)) {
           continue;
         }
@@ -502,6 +517,9 @@ function buildAllowedConnectorIds(params: {
       continue;
     }
     for (const connectorId of deriveConnectorKeysFromApp(app)) {
+      if (shouldExcludeConnectorId(connectorId)) {
+        continue;
+      }
       allowed.add(connectorId);
     }
   }
@@ -532,7 +550,7 @@ function buildRemoteToolConnectorMap(params: {
       const connectorId = params.allowedConnectorIds.has(normalizedStatusName)
         ? normalizedStatusName
         : resolveConnectorIdForRemoteToolName(resolvedName, params.allowedConnectorIds);
-      if (!connectorId) {
+      if (!connectorId || shouldExcludeConnectorId(connectorId)) {
         continue;
       }
       toolToConnector.set(resolvedName, connectorId);
@@ -544,13 +562,13 @@ function buildRemoteToolConnectorMap(params: {
 
 function withRoutingMetadata(tool: RemoteTool, route: BridgeRoute): Tool {
   const existingMeta = isRecord(tool._meta) ? tool._meta : {};
-  const outputSchema =
-    tool.outputSchema === undefined ? undefined : sanitizeToolSchema(tool.outputSchema);
+  const { outputSchema: _ignoredOutputSchema, ...toolWithoutOutputSchema } = tool as RemoteTool & {
+    outputSchema?: unknown;
+  };
   return {
-    ...tool,
+    ...toolWithoutOutputSchema,
     name: rewriteToolName(route.connectorId, route.remoteName),
     inputSchema: sanitizeToolSchema(tool.inputSchema),
-    outputSchema,
     annotations: sanitizeToolAnnotations(tool.annotations),
     icons: sanitizeToolIcons(tool.icons),
     _meta: {
@@ -722,7 +740,9 @@ export class ChatgptAppsMcpBridge {
 
   private async getPublicationState(): Promise<PublicationState> {
     const openclawConfig = this.loadOpenClawConfig();
-    const config = resolveChatgptAppsConfig(openclawConfig.plugins?.entries?.openai?.config ?? {});
+    const config = resolveChatgptAppsConfig(
+      openclawConfig.plugins?.entries?.["openai-apps"]?.config ?? {},
+    );
     const hardRefresh = this.consumeHardRefresh();
     if (hardRefresh) {
       const refreshResult = await this.ensureFreshSnapshot({
@@ -877,6 +897,9 @@ export class ChatgptAppsMcpBridge {
       if (!connectorId) {
         continue;
       }
+      if (shouldExcludeConnectorId(connectorId)) {
+        continue;
+      }
 
       const route = {
         connectorId,
@@ -919,6 +942,9 @@ export class ChatgptAppsMcpBridge {
         : (resolveConnectorIdForRemoteToolName(tool.name, enabledConnectorIds) ??
           resolveConnectorIdFromRemoteToolMetadata(tool));
       if (!connectorId) {
+        continue;
+      }
+      if (shouldExcludeConnectorId(connectorId)) {
         continue;
       }
       if (disabledConnectorIds.has(connectorId)) {

@@ -1,8 +1,8 @@
 {
-  "name": "@openclaw/openai-chatgpt-apps-bundle",
+  "name": "@openclaw/openai-apps",
   "version": "2026.3.29",
   "private": true,
-  "description": "Bundle-owned MCP bridge for exposing ChatGPT apps in OpenClaw",
+  "description": "Bundle-owned MCP bridge for exposing OpenAI apps in OpenClaw",
   "type": "module",
   "dependencies": {
     "@mariozechner/pi-ai": "0.63.2",

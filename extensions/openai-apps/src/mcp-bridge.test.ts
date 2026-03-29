@@ -13,14 +13,12 @@ function createConfig(): OpenClawConfig {
   return {
     plugins: {
       entries: {
-        openai: {
+        "openai-apps": {
           config: {
-            chatgptApps: {
-              enabled: true,
-              chatgptBaseUrl: "https://chatgpt.com",
-              connectors: {
-                slack: { enabled: true },
-              },
+            enabled: true,
+            chatgptBaseUrl: "https://chatgpt.com",
+            connectors: {
+              slack: { enabled: true },
             },
           },
         },
@@ -33,14 +31,12 @@ function createWildcardConfig(): OpenClawConfig {
   return {
     plugins: {
       entries: {
-        openai: {
+        "openai-apps": {
           config: {
-            chatgptApps: {
-              enabled: true,
-              chatgptBaseUrl: "https://chatgpt.com",
-              connectors: {
-                "*": { enabled: true },
-              },
+            enabled: true,
+            chatgptBaseUrl: "https://chatgpt.com",
+            connectors: {
+              "*": { enabled: true },
             },
           },
         },
@@ -117,7 +113,7 @@ async function writeSnapshot(stateDir: string, snapshot = createPersistedSnapsho
 }
 
 async function createStateDir(): Promise<string> {
-  return await mkdtemp(path.join(os.tmpdir(), "openclaw-chatgpt-apps-bridge-"));
+  return await mkdtemp(path.join(os.tmpdir(), "openai-apps-bridge-"));
 }
 
 describe("ChatgptAppsMcpBridge", () => {
@@ -157,6 +153,84 @@ describe("ChatgptAppsMcpBridge", () => {
         description: "Send to Slack",
       }),
     ]);
+  });
+
+  it("does not publish internal collab tools from the persisted snapshot", async () => {
+    const stateDir = await createStateDir();
+    const snapshot = createPersistedSnapshot();
+    snapshot.inventory.push({
+      id: "collab",
+      name: "Collab",
+      description: null,
+      logoUrl: null,
+      logoUrlDark: null,
+      distributionChannel: null,
+      branding: null,
+      appMetadata: null,
+      labels: null,
+      installUrl: null,
+      isAccessible: true,
+      isEnabled: true,
+      pluginDisplayNames: ["Collab"],
+    });
+    snapshot.statuses.push({
+      name: "collab",
+      tools: {
+        collab_send_message: {
+          name: "collab_send_message",
+          description: "Internal collab dispatch",
+          _meta: {
+            _codex_apps: {
+              resource_uri: "connectors://collab/tools/collab_send_message",
+            },
+            connector_id: "collab",
+          },
+          inputSchema: {
+            type: "object",
+            properties: {
+              message: {
+                type: "string",
+              },
+            },
+            required: ["message"],
+          },
+        },
+      },
+      resources: [],
+      resourceTemplates: [],
+      authStatus: "oAuth",
+    });
+    await writeSnapshot(stateDir, snapshot);
+
+    const bridge = new ChatgptAppsMcpBridge({
+      loadOpenClawConfig: () => createWildcardConfig(),
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+      ensureFreshSnapshot: async () => {
+        await new Promise(() => {});
+        throw new Error("unreachable");
+      },
+      resolveProjectedAuth: async () => ({
+        status: "ok",
+        accessToken: "access-token",
+        accountId: "acct_123",
+        planType: null,
+        profileId: "openai-codex:default",
+        identity: { email: "user@example.com", profileName: "user@example.com" },
+      }),
+      remoteClientFactory: async () => ({
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({
+          content: [{ type: "text", text: "ok" }],
+        }),
+        close: async () => {},
+      }),
+    });
+
+    const tools = await bridge.listTools();
+    expect(tools.map((tool) => tool.name)).toEqual(["chatgpt_app__slack__slack_send"]);
   });
 
   it("forwards tools/call to the remote ChatGPT apps endpoint", async () => {
@@ -217,6 +291,101 @@ describe("ChatgptAppsMcpBridge", () => {
     expect(listTools).not.toHaveBeenCalled();
     expect(result).toEqual({
       content: [{ type: "text", text: "sent" }],
+    });
+  });
+
+  it("drops remote output schemas so tool errors do not fail local validation", async () => {
+    const stateDir = await createStateDir();
+    const snapshot = createPersistedSnapshot();
+    snapshot.inventory[0] = {
+      ...snapshot.inventory[0],
+      id: "linear",
+      name: "Linear",
+      pluginDisplayNames: ["Linear"],
+    };
+    snapshot.statuses[0] = {
+      ...snapshot.statuses[0],
+      name: "linear",
+      tools: {
+        linear_get_profile: {
+          name: "linear_get_profile",
+          description: "Get Linear profile",
+          _meta: {
+            _codex_apps: {
+              resource_uri: "connectors://linear/tools/linear_get_profile",
+            },
+            connector_id: "linear",
+          },
+          inputSchema: {
+            type: "object",
+            properties: {},
+          },
+          outputSchema: {
+            type: "object",
+            properties: {
+              result: {
+                type: "object",
+              },
+            },
+            required: ["result"],
+          },
+        },
+      },
+    };
+    await writeSnapshot(stateDir, snapshot);
+
+    const bridge = new ChatgptAppsMcpBridge({
+      loadOpenClawConfig: () =>
+        ({
+          plugins: {
+            entries: {
+              "openai-apps": {
+                config: {
+                  enabled: true,
+                  chatgptBaseUrl: "https://chatgpt.com",
+                  connectors: {
+                    linear: { enabled: true },
+                  },
+                },
+              },
+            },
+          },
+        }) as OpenClawConfig,
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+      ensureFreshSnapshot: async () => {
+        await new Promise(() => {});
+        throw new Error("unreachable");
+      },
+      resolveProjectedAuth: async () => ({
+        status: "ok",
+        accessToken: "access-token",
+        accountId: "acct_123",
+        planType: null,
+        profileId: "openai-codex:default",
+        identity: { email: "user@example.com", profileName: "user@example.com" },
+      }),
+      remoteClientFactory: async () => ({
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({
+          content: [{ type: "text", text: "remote error" }],
+          structuredContent: {
+            status: "error",
+          },
+        }),
+        close: async () => {},
+      }),
+    });
+
+    const tools = await bridge.listTools();
+    expect(tools[0]?.outputSchema).toBeUndefined();
+    await expect(bridge.callTool("chatgpt_app__linear__linear_get_profile", {})).resolves.toEqual({
+      content: [{ type: "text", text: "remote error" }],
+      structuredContent: {
+        status: "error",
+      },
     });
   });
 

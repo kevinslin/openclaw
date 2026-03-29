@@ -58,7 +58,9 @@ export async function ensureFreshSnapshot(params: {
   const env = params.env ?? process.env;
   const now = params.now ?? Date.now;
   const openclawConfig = params.loadOpenClawConfig();
-  const config = resolveChatgptAppsConfig(openclawConfig.plugins?.entries?.openai?.config ?? {});
+  const config = resolveChatgptAppsConfig(
+    openclawConfig.plugins?.entries?.["openai-apps"]?.config ?? {},
+  );
   const statePaths = params.statePaths ?? resolveChatgptAppsStatePaths(env);
 
   if (!config.enabled) {

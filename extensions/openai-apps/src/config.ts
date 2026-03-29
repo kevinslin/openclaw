@@ -87,13 +87,12 @@ function normalizeConnectors(value: unknown): ChatgptAppsConfig["connectors"] {
   return normalized;
 }
 
-export function resolveOpenaiPluginConfig(config: OpenClawConfig): unknown {
-  return config.plugins?.entries?.openai?.config ?? {};
+export function resolveOpenaiAppsPluginConfig(config: OpenClawConfig): unknown {
+  return config.plugins?.entries?.["openai-apps"]?.config ?? {};
 }
 
 export function resolveChatgptAppsConfig(pluginConfig: unknown): ChatgptAppsConfig {
-  const raw =
-    isRecord(pluginConfig) && isRecord(pluginConfig.chatgptApps) ? pluginConfig.chatgptApps : {};
+  const raw = isRecord(pluginConfig) ? pluginConfig : {};
   const appServer = isRecord(raw.appServer) ? raw.appServer : {};
   const linking = isRecord(raw.linking) ? raw.linking : {};
 
