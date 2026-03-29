@@ -548,6 +548,18 @@ importers:
 
   extensions/openai: {}
 
+  extensions/openai-chatgpt-apps-bundle:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: 1.28.0
+        version: 1.28.0(zod@4.3.6)
+      codex-sdk-ts:
+        specifier: file:/Users/kevinlin/code/codex-sdk-ts
+        version: file:../codex-sdk-ts
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
+
   extensions/opencode: {}
 
   extensions/opencode-go: {}
@@ -3991,6 +4003,10 @@ packages:
   codec-parser@2.5.0:
     resolution: {integrity: sha512-Ru9t80fV8B0ZiixQl8xhMTLru+dzuis/KQld32/x5T/+3LwZb0/YvQdSKytX9JqCnRdiupvAvyYJINKrXieziQ==}
 
+  codex-sdk-ts@file:../codex-sdk-ts:
+    resolution: {directory: ../codex-sdk-ts, type: directory}
+    engines: {node: '>=20'}
+
   color-convert@2.0.1:
     resolution: {integrity: sha512-RRECPsj7iu/xb5oKYcsFHSppFNnsj/52OVTRKb4zP5onXwVF3zVmmToNcOfGC+CRDpfK/U584fMg38ZHCaElKQ==}
     engines: {node: '>=7.0.0'}
@@ -6667,11 +6683,6 @@ packages:
     resolution: {integrity: sha512-82+zCqoIXnXEF6C9YuN3Kf7WKlyyujY/6Ejl2n8PkwazYkBK0k7kiPd8S7nHvC5Wl7vjwGRhDYeAM8zTHyoRxQ==}
     engines: {node: '>=18.0.0'}
 
-  zod-to-json-schema@3.25.1:
-    resolution: {integrity: sha512-pM/SU9d3YAggzi6MtR4h7ruuQlqKtad8e9S0fmxcMi+ueAK5Korys/aWcV9LIIHTVbj01NdzxcnXSN+O74ZIVA==}
-    peerDependencies:
-      zod: ^3.25 || ^4
-
   zod-to-json-schema@3.25.2:
     resolution: {integrity: sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA==}
     peerDependencies:
@@ -8513,7 +8524,7 @@ snapshots:
       pkce-challenge: 5.0.1
       raw-body: 3.0.2
       zod: 4.3.6
-      zod-to-json-schema: 3.25.1(zod@4.3.6)
+      zod-to-json-schema: 3.25.2(zod@4.3.6)
     transitivePeerDependencies:
       - supports-color
 
@@ -10508,6 +10519,8 @@ snapshots:
 
   codec-parser@2.5.0:
     optional: true
+
+  codex-sdk-ts@file:../codex-sdk-ts: {}
 
   color-convert@2.0.1:
     dependencies:
@@ -13426,10 +13439,6 @@ snapshots:
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
-
-  zod-to-json-schema@3.25.1(zod@4.3.6):
-    dependencies:
-      zod: 4.3.6
 
   zod-to-json-schema@3.25.2(zod@4.3.6):
     dependencies:

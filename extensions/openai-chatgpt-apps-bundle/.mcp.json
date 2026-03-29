@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "openai-chatgpt-apps": {
+      "command": "node",
+      "args": ["--import", "tsx", "./src/server.ts"],
+      "cwd": "."
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/openai-chatgpt-apps-bundle",
+  "version": "2026.3.29",
+  "private": true,
+  "description": "Bundle-owned MCP bridge for exposing ChatGPT apps in OpenClaw",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.28.0",
+    "codex-sdk-ts": "file:/Users/kevinlin/code/codex-sdk-ts",
+    "tsx": "^4.21.0"
+  }
+}
