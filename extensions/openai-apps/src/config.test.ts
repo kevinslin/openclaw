@@ -9,7 +9,6 @@ describe("resolveChatgptAppsConfig", () => {
   it("applies defaults when openai-apps config is absent", () => {
     expect(resolveChatgptAppsConfig({})).toEqual({
       enabled: false,
-      chatgptBaseUrl: "https://chatgpt.com",
       appServer: {
         command: "codex",
         args: [],
@@ -54,7 +53,6 @@ describe("buildDerivedAppsConfig", () => {
   it("mirrors wildcard and connector enablement into the sidecar config", () => {
     const derived = buildDerivedAppsConfig({
       enabled: true,
-      chatgptBaseUrl: "https://chatgpt.com",
       appServer: { command: "codex", args: [] },
       linking: {
         enabled: false,
@@ -84,7 +82,6 @@ describe("buildDerivedAppsConfig", () => {
   it("omits optional null-valued fields from sidecar config entries", () => {
     const derived = buildDerivedAppsConfig({
       enabled: true,
-      chatgptBaseUrl: "https://chatgpt.com",
       appServer: { command: "codex", args: [] },
       linking: {
         enabled: false,

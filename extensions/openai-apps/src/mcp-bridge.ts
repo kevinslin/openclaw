@@ -718,7 +718,6 @@ export class ChatgptAppsMcpBridge {
     const remoteClient = await this.getRemoteClient({
       accessToken: auth.accessToken,
       accountId: auth.accountId,
-      chatgptBaseUrl: publicationState.config.chatgptBaseUrl,
     });
     return await remoteClient.callTool({
       name: route.remoteName,
@@ -798,7 +797,6 @@ export class ChatgptAppsMcpBridge {
   private async getRemoteClient(params: {
     accessToken: string;
     accountId: string;
-    chatgptBaseUrl: string;
   }): Promise<RemoteCodexAppsClient> {
     const authKey = `${params.accountId}:${params.accessToken}`;
     if (this.remoteClientState?.authKey === authKey) {
@@ -811,7 +809,6 @@ export class ChatgptAppsMcpBridge {
     const previous = this.remoteClientState;
     this.remoteClientState = null;
     this.remoteClientPromise = this.remoteClientFactory({
-      chatgptBaseUrl: params.chatgptBaseUrl,
       auth: {
         accessToken: params.accessToken,
         accountId: params.accountId,
@@ -836,7 +833,7 @@ export class ChatgptAppsMcpBridge {
     const snapshotKey =
       publicationState.kind === "snapshot"
         ? `snapshot:${computeSnapshotKey(publicationState.snapshot)}:${hashChatgptAppsConfig(publicationState.config)}`
-        : `degraded:${hashChatgptBaseUrl(publicationState.config.chatgptBaseUrl)}:${hashChatgptAppsConfig(publicationState.config)}`;
+        : `degraded:${hashChatgptBaseUrl()}:${hashChatgptAppsConfig(publicationState.config)}`;
     if (this.toolCache?.snapshotKey === snapshotKey) {
       return this.toolCache;
     }
@@ -882,7 +879,7 @@ export class ChatgptAppsMcpBridge {
               tool ? [tool as RemoteTool] : [],
             ),
           )
-        : await this.listRemoteTools(config.chatgptBaseUrl);
+        : await this.listRemoteTools();
     const remoteToolPrefixCounts = buildRemoteToolPrefixCounts(remoteTools);
     const remoteToolConnectorMap = buildRemoteToolConnectorMap({
       statuses: snapshot.statuses,
@@ -927,13 +924,13 @@ export class ChatgptAppsMcpBridge {
       buildConnectorConfigState(config.connectors);
     if (!wildcardEnabled && enabledConnectorIds.size === 0) {
       return {
-        snapshotKey: `degraded:${hashChatgptBaseUrl(config.chatgptBaseUrl)}:${hashChatgptAppsConfig(config)}`,
+        snapshotKey: `degraded:${hashChatgptBaseUrl()}:${hashChatgptAppsConfig(config)}`,
         tools,
         routes,
       };
     }
 
-    const remoteTools = await this.listRemoteTools(config.chatgptBaseUrl);
+    const remoteTools = await this.listRemoteTools();
     const prefixCounts = buildRemoteToolPrefixCounts(remoteTools);
     for (const tool of remoteTools) {
       const connectorId = wildcardEnabled
@@ -965,13 +962,13 @@ export class ChatgptAppsMcpBridge {
     }
 
     return {
-      snapshotKey: `degraded:${hashChatgptBaseUrl(config.chatgptBaseUrl)}:${hashChatgptAppsConfig(config)}`,
+      snapshotKey: `degraded:${hashChatgptBaseUrl()}:${hashChatgptAppsConfig(config)}`,
       tools,
       routes,
     };
   }
 
-  private async listRemoteTools(chatgptBaseUrl: string): Promise<RemoteTool[]> {
+  private async listRemoteTools(): Promise<RemoteTool[]> {
     const auth = await this.resolveProjectedAuth({
       config: this.loadOpenClawConfig(),
       agentDir: this.env.OPENCLAW_AGENT_DIR,
@@ -983,7 +980,6 @@ export class ChatgptAppsMcpBridge {
     const remoteClient = await this.getRemoteClient({
       accessToken: auth.accessToken,
       accountId: auth.accountId,
-      chatgptBaseUrl,
     });
 
     const tools: RemoteTool[] = [];

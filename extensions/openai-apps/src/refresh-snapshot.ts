@@ -110,7 +110,7 @@ export async function ensureFreshSnapshot(params: {
     accountId: auth.accountId,
     authIdentityKey: buildAuthIdentityKey(auth.identity),
     configHash: hashChatgptAppsConfig(config),
-    baseUrlHash: hashChatgptBaseUrl(config.chatgptBaseUrl),
+    baseUrlHash: hashChatgptBaseUrl(),
   };
 
   if (
@@ -184,7 +184,7 @@ export async function ensureFreshSnapshot(params: {
       accountId: auth.accountId,
       authIdentityKey: buildAuthIdentityKey(auth.identity),
       configHash: hashChatgptAppsConfig(config),
-      baseUrlHash: hashChatgptBaseUrl(config.chatgptBaseUrl),
+      baseUrlHash: hashChatgptBaseUrl(),
       inventory: capture.inventory,
       statuses: capture.statuses,
     };

@@ -212,7 +212,6 @@ plugin entry:
         "config": {
           "chatgptApps": {
             "enabled": false,
-            "chatgptBaseUrl": "https://chatgpt.com",
             "appServer": {
               "command": "codex",
               "args": []
@@ -263,17 +262,14 @@ This avoids collisions with:
 
 ### 7) Use the correct ChatGPT apps endpoint derivation
 
-The bridge should keep the endpoint derivation rules already established by the
-Codex source flow:
+The bridge should derive its remote endpoint from a bundle-owned constant for
+the ChatGPT app surface:
 
 - `https://chatgpt.com` -> `https://chatgpt.com/backend-api/wham/apps`
-- `https://chat.openai.com` -> `https://chat.openai.com/backend-api/wham/apps`
-- bases that already include `/api/codex` -> append `/apps`
-- all other bases -> append `/api/codex/apps`
 
 This remains separate from the OpenClaw model transport base URL. The bundle
-should keep a dedicated `chatgptBaseUrl` setting instead of trying to infer app
-endpoints from the model provider transport.
+should keep that endpoint internal instead of exposing it as a user-configurable
+setting.
 
 ### 8) Define cache boundaries and invalidation
 
@@ -316,7 +312,6 @@ Invalidated by:
 - account id change
 - access token owner change
 - `chatgptApps` config hash change
-- `chatgptBaseUrl` change
 - TTL expiry
 - missing or corrupt snapshot state
 

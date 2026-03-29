@@ -18,7 +18,7 @@ diagnostics hardening needed for local dogfooding.
 ### In Scope
 
 - Implement the bundle-side remote ChatGPT apps MCP client.
-- Derive the correct ChatGPT apps endpoint from `chatgptBaseUrl`.
+- Derive the correct ChatGPT apps endpoint from the bundle constant.
 - Forward `tools/call` with OpenClaw-owned auth headers.
 - Rebuild route metadata from the persisted snapshot after bridge restart.
 - Add an operator/debug hard-refresh path within the bundle entry/runtime.
@@ -70,7 +70,7 @@ only during publication.
 - The bundle must call the remote ChatGPT apps endpoint directly; it must not
   proxy execution through `codex app-server`.
 - Auth continues to come from OpenClaw-owned `openai-codex` state.
-- Endpoint derivation must follow the design’s `chatgptBaseUrl` rules exactly.
+- Endpoint derivation must follow the design’s bundle-owned constant rules exactly.
 - Route metadata must remain recoverable from bundle-owned persisted snapshot
   state after bridge restart; bridge-local in-memory routing is not durable.
 - Hard refresh should remain debug/operator-oriented and use bundle-local
@@ -92,8 +92,8 @@ only during publication.
 Extend the bundle bridge so `tools/call` becomes a real remote execution path.
 At tool-call time, the bridge resolves current OpenClaw auth, maps the local
 tool name back to connector/tool identity using route metadata derived from the
-persisted snapshot, derives the remote ChatGPT apps endpoint from
-`chatgptBaseUrl`, sends the remote MCP call with the required auth headers, and
+persisted snapshot, derives the remote ChatGPT apps endpoint from the
+bundle-owned constant, sends the remote MCP call with the required auth headers, and
 forwards the result through the normal MCP response path.
 
 The bridge remains mostly stateless except for in-memory route metadata:
@@ -123,7 +123,7 @@ Milestone 3 must make these execution contracts explicit:
 - `extensions/openai-chatgpt-apps-bundle/src/remote-codex-apps-client.ts`
   Why: remote endpoint derivation and transport client logic.
 - `extensions/openai-chatgpt-apps-bundle/src/config.ts`
-  Why: `chatgptBaseUrl` normalization and config hashing.
+  Why: bundle-owned endpoint constant and config hashing.
 - `extensions/openai-chatgpt-apps-bundle/src/snapshot-cache.ts`
   Why: snapshot reads and route rebuild input live here.
 - `extensions/openai-chatgpt-apps-bundle/src/refresh-snapshot.ts`
@@ -141,7 +141,7 @@ Milestone 3 must make these execution contracts explicit:
   bridge restart instead of introducing bridge-local persistence.
 - Hard refresh: use a bundle-local startup flag or env bypass rather than a
   service control protocol or model-visible tool.
-- Endpoint derivation: follow the explicit `chatgptBaseUrl` mapping rules from
+- Endpoint derivation: follow the bundle-owned endpoint constant described in
   the design doc.
 - Error mapping: auth failure, route failure, and remote execution failure are
   separate execution outcomes and should remain distinguishable in diagnostics.
@@ -183,7 +183,7 @@ Milestone 3 must make these execution contracts explicit:
 ### Phase 1: Remote Client and Endpoint Derivation
 
 - [ ] Implement `remote-codex-apps-client.ts`.
-- [ ] Implement `chatgptBaseUrl` normalization and endpoint derivation rules.
+- [ ] Implement bundle-owned endpoint derivation.
 - [ ] Validate the required auth header shape for remote calls.
 
 ### Phase 2: Executable Tool Routing

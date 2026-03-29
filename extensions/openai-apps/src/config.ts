@@ -15,14 +15,13 @@ type DerivedAppsConfig = {
   _default: AppsDefaultConfig;
 } & Record<string, DerivedAppConfig>;
 
-const DEFAULT_CHATGPT_BASE_URL = "https://chatgpt.com";
+export const CHATGPT_APPS_BASE_URL = "https://chatgpt.com";
 const DEFAULT_APP_SERVER_COMMAND = "codex";
 const DEFAULT_LINK_WAIT_TIMEOUT_MS = 60_000;
 const DEFAULT_LINK_POLL_INTERVAL_MS = 3_000;
 
 export type ChatgptAppsConfig = {
   enabled: boolean;
-  chatgptBaseUrl: string;
   appServer: {
     command: string;
     args: string[];
@@ -98,7 +97,6 @@ export function resolveChatgptAppsConfig(pluginConfig: unknown): ChatgptAppsConf
 
   return {
     enabled: typeof raw.enabled === "boolean" ? raw.enabled : false,
-    chatgptBaseUrl: normalizeNonEmptyString(raw.chatgptBaseUrl) ?? DEFAULT_CHATGPT_BASE_URL,
     appServer: {
       command: normalizeNonEmptyString(appServer.command) ?? DEFAULT_APP_SERVER_COMMAND,
       args: normalizeAppServerArgs(appServer.args),
@@ -147,6 +145,6 @@ export function hashChatgptAppsConfig(config: ChatgptAppsConfig): string {
   return createHash("sha256").update(JSON.stringify(config)).digest("hex");
 }
 
-export function hashChatgptBaseUrl(chatgptBaseUrl: string): string {
-  return createHash("sha256").update(chatgptBaseUrl).digest("hex");
+export function hashChatgptBaseUrl(): string {
+  return createHash("sha256").update(CHATGPT_APPS_BASE_URL).digest("hex");
 }

@@ -11,7 +11,6 @@ type LoginAccountResponse = protocol.v2.LoginAccountResponse;
 
 const config: ChatgptAppsConfig = {
   enabled: true,
-  chatgptBaseUrl: "https://chatgpt.com",
   appServer: {
     command: "codex",
     args: [],

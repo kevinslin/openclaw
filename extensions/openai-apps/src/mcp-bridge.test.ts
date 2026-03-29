@@ -16,7 +16,6 @@ function createConfig(): OpenClawConfig {
         "openai-apps": {
           config: {
             enabled: true,
-            chatgptBaseUrl: "https://chatgpt.com",
             connectors: {
               slack: { enabled: true },
             },
@@ -34,7 +33,6 @@ function createWildcardConfig(): OpenClawConfig {
         "openai-apps": {
           config: {
             enabled: true,
-            chatgptBaseUrl: "https://chatgpt.com",
             connectors: {
               "*": { enabled: true },
             },
@@ -270,7 +268,6 @@ describe("ChatgptAppsMcpBridge", () => {
     });
 
     expect(remoteClientFactory).toHaveBeenCalledWith({
-      chatgptBaseUrl: "https://chatgpt.com",
       auth: {
         accessToken: "access-token",
         accountId: "acct_123",
@@ -342,7 +339,6 @@ describe("ChatgptAppsMcpBridge", () => {
               "openai-apps": {
                 config: {
                   enabled: true,
-                  chatgptBaseUrl: "https://chatgpt.com",
                   connectors: {
                     linear: { enabled: true },
                   },
@@ -536,7 +532,6 @@ describe("ChatgptAppsMcpBridge", () => {
         message: "Timed out refreshing ChatGPT apps snapshot",
         config: {
           enabled: true,
-          chatgptBaseUrl: "https://chatgpt.com",
           appServer: { command: "codex", args: [] },
           linking: {
             enabled: false,
@@ -641,7 +636,6 @@ describe("ChatgptAppsMcpBridge", () => {
         message: "Timed out refreshing ChatGPT apps snapshot",
         config: {
           enabled: true,
-          chatgptBaseUrl: "https://chatgpt.com",
           appServer: { command: "codex", args: [] },
           linking: {
             enabled: false,
@@ -729,7 +723,6 @@ describe("ChatgptAppsMcpBridge", () => {
         snapshot,
         config: {
           enabled: true,
-          chatgptBaseUrl: "https://chatgpt.com",
           appServer: { command: "codex", args: [] },
           linking: {
             enabled: false,
@@ -808,7 +801,6 @@ describe("ChatgptAppsMcpBridge", () => {
       snapshot: refreshedSnapshot,
       config: {
         enabled: true,
-        chatgptBaseUrl: "https://chatgpt.com",
         appServer: { command: "codex", args: [] },
         linking: {
           enabled: false,
@@ -892,7 +884,6 @@ describe("ChatgptAppsMcpBridge", () => {
         snapshot,
         config: {
           enabled: true,
-          chatgptBaseUrl: "https://chatgpt.com",
           appServer: { command: "codex", args: [] },
           linking: {
             enabled: false,
@@ -1043,7 +1034,6 @@ describe("ChatgptAppsMcpBridge", () => {
         message: "Timed out refreshing ChatGPT apps snapshot",
         config: {
           enabled: true,
-          chatgptBaseUrl: "https://chatgpt.com",
           appServer: { command: "codex", args: [] },
           linking: {
             enabled: false,
@@ -1145,7 +1135,6 @@ describe("ChatgptAppsMcpBridge", () => {
         message: "Timed out refreshing ChatGPT apps snapshot",
         config: {
           enabled: true,
-          chatgptBaseUrl: "https://chatgpt.com",
           appServer: { command: "codex", args: [] },
           linking: {
             enabled: false,
@@ -1243,7 +1232,6 @@ describe("ChatgptAppsMcpBridge", () => {
         message: "Timed out refreshing ChatGPT apps snapshot",
         config: {
           enabled: true,
-          chatgptBaseUrl: "https://chatgpt.com",
           appServer: { command: "codex", args: [] },
           linking: {
             enabled: false,

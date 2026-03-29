@@ -15,7 +15,6 @@ function createConfig(connectors?: Record<string, { enabled: boolean }>): OpenCl
         "openai-apps": {
           config: {
             enabled: true,
-            chatgptBaseUrl: "https://chatgpt.com",
             connectors: connectors ?? {},
           },
         },
