@@ -1034,4 +1034,100 @@ describe("ChatgptAppsMcpBridge", () => {
       },
     });
   });
+
+  it("adds empty properties to object schemas that only declare additionalProperties", async () => {
+    const listTools = vi.fn(async () => ({
+      tools: [
+        {
+          name: "google drive_batch_update_presentation",
+          description: "Apply raw Google Slides batchUpdate requests",
+          _meta: {
+            connector_id: "google_drive_batch_update",
+          },
+          inputSchema: {
+            type: "object",
+            properties: {
+              requests: {
+                type: "array",
+                items: {
+                  $ref: "#/$defs/GoogleSlidesBatchUpdateRequestOperation",
+                },
+              },
+            },
+            required: ["requests"],
+            $defs: {
+              GoogleSlidesBatchUpdateRequestOperation: {
+                type: "object",
+                additionalProperties: true,
+              },
+            },
+          },
+        },
+      ] satisfies Tool[],
+    }));
+
+    const bridge = new ChatgptAppsMcpBridge({
+      loadOpenClawConfig: () => createConfig(),
+      ensureFreshSnapshot: async () => ({
+        status: "error",
+        reason: "refresh",
+        message: "Timed out refreshing ChatGPT apps snapshot",
+        config: {
+          enabled: true,
+          chatgptBaseUrl: "https://chatgpt.com",
+          appServer: { command: "codex", args: [] },
+          linking: {
+            enabled: false,
+            waitTimeoutMs: 60_000,
+            pollIntervalMs: 3_000,
+          },
+          connectors: {
+            google_drive_batch_update: { enabled: true },
+          },
+        },
+        openclawConfig: createConfig(),
+        statePaths: resolveChatgptAppsStatePaths({
+          OPENCLAW_STATE_DIR: path.join(os.tmpdir(), "openclaw-chatgpt-apps-bridge"),
+          HOME: os.tmpdir(),
+        }),
+      }),
+      resolveProjectedAuth: async () => ({
+        status: "ok",
+        accessToken: "access-token",
+        accountId: "acct_123",
+        planType: null,
+        profileId: "openai-codex:default",
+        identity: { email: "user@example.com", profileName: "user@example.com" },
+      }),
+      remoteClientFactory: async () => ({
+        listTools,
+        callTool: async () => ({
+          content: [{ type: "text", text: "ok" }],
+        }),
+        close: async () => {},
+      }),
+    });
+
+    const tools = await bridge.listTools();
+    expect(tools).toHaveLength(1);
+    expect(tools[0]?.inputSchema).toEqual({
+      type: "object",
+      properties: {
+        requests: {
+          type: "array",
+          items: {
+            $ref: "#/$defs/GoogleSlidesBatchUpdateRequestOperation",
+          },
+        },
+      },
+      required: ["requests"],
+      $defs: {
+        GoogleSlidesBatchUpdateRequestOperation: {
+          type: "object",
+          properties: {},
+          additionalProperties: true,
+        },
+      },
+    });
+  });
 });

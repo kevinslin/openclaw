@@ -188,6 +188,10 @@ function sanitizeJsonSchemaNode(value: unknown): unknown {
     }
   }
 
+  if (sanitized.type === "object" && !isRecord(sanitized.properties)) {
+    sanitized.properties = {};
+  }
+
   delete sanitized.anyOf;
   delete sanitized.oneOf;
   delete sanitized.allOf;
