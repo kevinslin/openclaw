@@ -1,4 +1,4 @@
-# Feature Spec: Milestone 1 - Native Service and Bundle Skeleton
+# Feature Spec: Milestone 1 - Bundle Skeleton and Bundle-Owned State Contract
 
 **Date:** 2026-03-28
 **Status:** Planning
@@ -10,32 +10,30 @@
 ### Goal
 
 Land the minimum plugin-only structure needed to expose ChatGPT apps through a
-separate Codex bundle while keeping app-server ownership in the existing native
-`openai` plugin via `registerService(...)`. Milestone 1 should establish the
-package layout, shared control contract, config schema, and lightweight service
-startup behavior without yet requiring full connector refresh or remote tool
-execution.
+separate Codex bundle while keeping all runtime ownership inside the bundle MCP
+subprocess. Milestone 1 should establish the package layout, bundle-owned state
+contract, config schema, and bridge bootstrap behavior without yet requiring
+full connector refresh or remote tool execution.
 
 ### In Scope
 
 - Add a separate bundle package root for ChatGPT apps under `extensions/`.
-- Add native `openai` plugin service registration for ChatGPT apps.
-- Define the shared namespaced state layout and control protocol between the
-  native service and the bundle bridge.
+- Define the bundle-owned runtime cache layout under `OPENCLAW_STATE_DIR`.
 - Extend `extensions/openai/openclaw.plugin.json` with the `chatgptApps`
   config schema needed by later milestones.
 - Add the local `file:/Users/kevinlin/code/codex-sdk-ts` dependency in the new
   bundle package for local development.
-- Keep the native service lightweight at startup so it does not eagerly spawn
-  `codex app-server`.
+- Add bundle bridge scaffolding that loads config, resolves state paths, and
+  prepares for later on-demand refresh behavior.
 
 ### Out of Scope
 
 - Full `app/list` pagination and persisted connector snapshot refresh logic.
 - Remote ChatGPT apps MCP `tools/call` execution.
 - End-to-end connector publication through real app inventory.
-- Any OpenClaw runtime changes under `src/` beyond consuming existing plugin
-  SDK surfaces.
+- Any OpenClaw runtime changes under `src/` beyond consuming existing bundle
+  loading and exported plugin-sdk surfaces.
+- Any native `registerService(...)` or service-to-bundle control contract.
 - CI- or marketplace-ready replacement for the local `file:` SDK dependency.
 
 ---
@@ -44,45 +42,44 @@ execution.
 
 ### Background
 
-The design for `docs/specs/2026-03-chatgpt-apps/design.md` intentionally moved
-away from the earlier native-plugin-heavy approach because that version added
-runtime seams and a new `service` concept to OpenClaw core. The approved design
-keeps the good parts of the prior branch, especially app-server supervision and
-OpenClaw-owned auth projection, but requires all new behavior to stay inside
-plugin code. Milestone 1 is the enabling step that creates the service-plus-
-bundle split without taking dependency on connector refresh behavior being
-finished yet.
+The updated design in `docs/specs/2026-03-chatgpt-apps/design.md` intentionally
+backs away from the earlier service-plus-bundle split. The approved direction
+keeps the useful app-server and auth-projection logic, but it requires all new
+runtime ownership to stay inside the bundle MCP subprocess. Milestone 1 is the
+enabling step that creates that bundle-only seam without taking dependency on
+connector refresh behavior being finished yet.
 
 ### Current State
 
-- `extensions/openai/index.ts` registers providers and a CLI backend, but no
-  ChatGPT apps service.
-- `extensions/openai/openclaw.plugin.json` has an empty plugin config schema.
+- `extensions/openai/openclaw.plugin.json` has no ChatGPT apps config schema.
 - Bundle MCP support already exists via `.codex-plugin/plugin.json` and
   `.mcp.json`, merged into embedded Pi config by existing bundle loading code.
-- Plugin services already exist and start with a shared `stateDir` via
-  `src/plugins/services.ts` and `src/plugins/types.ts`.
-- There is no plugin-specific runtime state root; any service/bundle shared
-  state must be namespaced under the existing shared state directory.
+- There is no need for a native service in this design, so
+  `extensions/openai/index.ts` should remain untouched for ChatGPT apps
+  lifecycle concerns.
+- Bundle subprocesses inherit normal OpenClaw env such as `OPENCLAW_STATE_DIR`,
+  which can be used to derive deterministic plugin-owned cache paths without
+  runtime changes.
+- There is no plugin-specific service state root or control socket to define in
+  this architecture.
 
 ### Required Pre-Read
 
 - `docs/specs/2026-03-chatgpt-apps/design.md`
-- `extensions/openai/index.ts`
 - `extensions/openai/openclaw.plugin.json`
-- `src/plugins/services.ts`
-- `src/plugins/types.ts`
 - `src/plugins/bundle-mcp.ts`
 - `src/agents/embedded-pi-mcp.ts`
+- `docs/plugins/bundles.md`
 
 ### Constraints
 
 - Only plugin code should change. No new runtime primitives in `src/`.
 - The native `openai` package cannot also be the bundle root because native
   manifests win over `.codex-plugin/plugin.json`.
-- `registerService(...)` starts with normal plugin service startup, so the
-  ChatGPT apps service must be safe and cheap when enabled but unused.
-- The service and the bundle must agree on one deterministic shared-state root.
+- Milestone 1 must not reintroduce `registerService(...)` or any bundle-to-
+  service control channel.
+- The bundle must own one deterministic runtime cache root under
+  `OPENCLAW_STATE_DIR/plugin-runtimes/openai-chatgpt-apps/`.
 - `file:/Users/kevinlin/code/codex-sdk-ts` is acceptable for local work but not
   portable to CI or broader distribution.
 
@@ -91,7 +88,7 @@ finished yet.
 - Local access to `/Users/kevinlin/code/codex-sdk-ts` is required to install the
   new bundle package as designed.
 - Later milestones depend on valid `openai-codex` OAuth state, but Milestone 1
-  should not require live auth to validate startup behavior and package wiring.
+  should not require live auth to validate package wiring and bridge startup.
 
 ---
 
@@ -101,43 +98,29 @@ finished yet.
 
 Create a new bundle package under `extensions/openai-chatgpt-apps-bundle/` that
 declares exactly one stdio MCP server and contains the future bridge entrypoint.
-At the same time, add a lightweight ChatGPT apps service to the native
-`openai` plugin. The service owns a deterministic shared-state directory and
-publishes control metadata, but does not start `codex app-server` until the
-bridge asks for connector state. This milestone should leave later refresh and
-execution code as stubs or thin scaffolding, but the ownership and file layout
-must be final enough that Milestones 2 and 3 do not need to rethink the seam.
+At the same time, extend the native `openai` plugin config schema so the bundle
+can read `plugins.entries.openai.config.chatgptApps`. The bundle owns its own
+runtime cache layout under `OPENCLAW_STATE_DIR`, but Milestone 1 stops short of
+real app-server refresh work.
 
 Milestone 1 must produce these concrete artifacts and invocation contracts:
 
-- the native service `start(...)` creates
-  `${STATE_DIR}/plugin-runtimes/openai-chatgpt-apps/`
-- the native service atomically writes `control.json` in that directory during
-  startup
-- the native service defines, but does not yet fully exercise, the control
-  methods `snapshot/read`, `snapshot/refresh`, and `health/read`
-- the bundle bridge entrypoint reads `control.json` first and never reads
-  snapshot files directly
-- if `control.json` is missing or invalid, the bridge returns no app tools and
-  emits diagnostics instead of spawning fallback behavior
+- the bundle package exists and is discoverable as Codex bundle format
+- `state-paths.ts` resolves
+  `${OPENCLAW_STATE_DIR}/plugin-runtimes/openai-chatgpt-apps/`
+- `server.ts` loads config and bundle-owned state paths before instantiating the
+  bridge
+- the bridge returns no app tools when the feature is disabled or when no
+  publishable snapshot exists yet
+- there is no native service registration, control metadata file, or bundle-
+  to-service IPC dependency
 
 ### Integration Points / Touchpoints
 
 - `docs/specs/2026-03-chatgpt-apps/design.md`
-  Why: source of truth for the service/bundle architecture and milestone scope.
-- `extensions/openai/index.ts`
-  Why: native plugin entrypoint where `registerService(...)` must be added.
+  Why: source of truth for the bundle-owned architecture and milestone scope.
 - `extensions/openai/openclaw.plugin.json`
   Why: host schema for `plugins.entries.openai.config.chatgptApps`.
-- `extensions/openai/chatgpt-apps/service.ts`
-  Why: new lightweight service owner for shared-state setup and future
-  app-server supervision.
-- `extensions/openai/chatgpt-apps/state-paths.ts`
-  Why: shared deterministic path helpers used by both native service and
-  bundle code.
-- `extensions/openai/chatgpt-apps/control-protocol.ts`
-  Why: typed control request and response contract for `snapshot/read`,
-  `snapshot/refresh`, and `health/read`.
 - `extensions/openai-chatgpt-apps-bundle/package.json`
   Why: new bundle package metadata and local `codex-sdk-ts` dependency.
 - `extensions/openai-chatgpt-apps-bundle/.codex-plugin/plugin.json`
@@ -145,10 +128,13 @@ Milestone 1 must produce these concrete artifacts and invocation contracts:
 - `extensions/openai-chatgpt-apps-bundle/.mcp.json`
   Why: declaration of the single stdio MCP bridge server.
 - `extensions/openai-chatgpt-apps-bundle/src/server.ts`
-  Why: stdio bridge entrypoint that will consume the shared-state contract.
-- `extensions/openai-chatgpt-apps-bundle/src/service-client.ts`
-  Why: bundle-side control client that reads `control.json` and talks to the
-  native service instead of reading snapshot files directly.
+  Why: stdio bridge entrypoint that will own later refresh and execution flows.
+- `extensions/openai-chatgpt-apps-bundle/src/config.ts`
+  Why: bundle-side config normalization and feature gating.
+- `extensions/openai-chatgpt-apps-bundle/src/state-paths.ts`
+  Why: bundle-owned cache path helpers rooted under `OPENCLAW_STATE_DIR`.
+- `extensions/openai-chatgpt-apps-bundle/src/mcp-bridge.ts`
+  Why: bridge bootstrap and empty/diagnostic tool publication path.
 - `src/plugins/bundle-mcp.ts`
   Why: verify the chosen bundle structure matches current loading behavior;
   should not be modified in this milestone.
@@ -160,31 +146,26 @@ Milestone 1 must produce these concrete artifacts and invocation contracts:
 
 - Bundle placement: the ChatGPT apps bundle will live in its own
   `extensions/openai-chatgpt-apps-bundle/` package, not in `extensions/openai/`.
-- Service startup: `start(...)` creates shared-state metadata only and defers
-  sidecar startup until a later bridge request.
-- Shared state: both the native service and bundle will use one namespaced root
-  under `${STATE_DIR}/plugin-runtimes/openai-chatgpt-apps/`.
-- Snapshot ownership: the service will be the only component that reads or
-  writes persisted snapshot files; the bridge will use the control endpoint.
-- Failure behavior: missing or invalid control metadata will be surfaced as
-  bundle diagnostics plus an empty app toolset, not as implicit fallback logic.
+- Runtime ownership: the bundle subprocess owns all future refresh behavior; no
+  native service is introduced.
+- State layout: the bundle will use one namespaced cache root under
+  `${OPENCLAW_STATE_DIR}/plugin-runtimes/openai-chatgpt-apps/`.
+- Snapshot bootstrap: Milestone 1 can operate with no snapshot present and
+  publish an empty toolset plus diagnostics.
 - Dependency strategy: the bundle will use a local `file:` dependency on
   `/Users/kevinlin/code/codex-sdk-ts` for now.
 
 ### Important Implementation Notes
 
-- Milestone 1 should not introduce placeholder runtime hooks that imply core
-  changes later. If a seam cannot be expressed with current plugin surfaces,
-  the spec should not pretend otherwise.
-- The service should remain safe even when `chatgptApps.enabled = true` and the
-  bundle is not installed.
-- The bundle entrypoint can contain scaffold behavior, but it should already
-  honor the control metadata file path contract rather than inventing a second
-  discovery path.
-- The service must be safe in two startup states:
-  - `chatgptApps.enabled = true` and bundle installed
-  - `chatgptApps.enabled = true` and bundle absent
-    In both cases, `start(...)` must remain lightweight and non-failing.
+- Milestone 1 should not introduce placeholder hooks that imply service-based
+  runtime support later.
+- The bridge must be safe when `chatgptApps.enabled = true` but no snapshot
+  exists yet.
+- The bridge may contain scaffold behavior, but it should already honor the
+  bundle-owned state-path contract rather than inventing a second cache path.
+- If `OPENCLAW_STATE_DIR` is missing, `state-paths.ts` should still derive the
+  canonical OpenClaw state dir using existing state-resolution helpers instead
+  of inventing a bundle-local fallback.
 
 ---
 
@@ -192,18 +173,15 @@ Milestone 1 must produce these concrete artifacts and invocation contracts:
 
 - [ ] A separate bundle package exists for ChatGPT apps and is structurally
       discoverable as a Codex bundle rather than a native plugin.
-- [ ] The native `openai` plugin registers a ChatGPT apps service using the
-      existing `registerService(...)` SDK surface and does not require any
-      runtime/core changes under `src/`.
-- [ ] The service and bundle share one explicit, documented state and control
-      contract, including deterministic path helpers and typed control payloads.
-- [ ] Enabling `plugins.entries.openai.config.chatgptApps.enabled` starts only a
-      lightweight native service and does not eagerly spawn `codex app-server`.
-- [ ] The `openai` plugin config schema contains the `chatgptApps` settings
-      needed by later milestones.
-- [ ] The bundle bridge is wired to consume `control.json` first and surfaces
-      missing or invalid control metadata through diagnostics plus an empty app
-      toolset instead of fallback process spawning.
+- [ ] The native `openai` plugin config schema contains the `chatgptApps`
+      settings needed by later milestones.
+- [ ] The bundle owns one explicit, documented runtime cache contract rooted at
+      `OPENCLAW_STATE_DIR/plugin-runtimes/openai-chatgpt-apps/`.
+- [ ] No native `openai` service registration or service-control contract is
+      added for ChatGPT apps.
+- [ ] The bundle bridge loads config and state paths successfully and can return
+      diagnostics plus an empty app toolset when no snapshot is available yet.
+- [ ] No OpenClaw runtime/core changes under `src/` are required.
 
 ---
 
@@ -217,34 +195,29 @@ Milestone 1 must produce these concrete artifacts and invocation contracts:
 - [ ] Add the local `file:/Users/kevinlin/code/codex-sdk-ts` dependency to the
       bundle package.
 
-### Phase 2: Native Service Registration and Shared-State Contract
+### Phase 2: Bundle-Owned State Contract
 
-- [ ] Add ChatGPT apps service registration in `extensions/openai/index.ts`.
 - [ ] Add `state-paths.ts` with deterministic namespaced path helpers.
-- [ ] Add `control-protocol.ts` with typed request and response contracts.
-- [ ] Add a lightweight `service.ts` skeleton that creates the shared-state
-      directory and `control.json` but does not yet do full refresh work.
-- [ ] Define the initial `health/read`, `snapshot/read`, and `snapshot/refresh`
-      response shapes, including how "not ready yet" is represented.
+- [ ] Define the initial snapshot/debug file names the bundle will own later.
+- [ ] Add `config.ts` helpers that normalize feature gating and base config.
+- [ ] Ensure the bridge can resolve the state root without relying on any new
+      runtime API or service startup hook.
 
-### Phase 3: Bundle Bootstrap Wiring
+### Phase 3: Bridge Bootstrap Wiring
 
-- [ ] Add `src/server.ts` and `src/service-client.ts` scaffolding that consumes
-      the shared-state contract.
-- [ ] Ensure the bridge entrypoint expects the native service to own snapshot
-      files and control metadata.
-- [ ] Ensure the bridge returns diagnostics plus an empty app toolset when
-      control metadata is missing or invalid.
-- [ ] Add tests that prove package detection and lightweight service startup.
+- [ ] Add `src/server.ts` and `src/mcp-bridge.ts` scaffolding.
+- [ ] Ensure the bridge returns diagnostics plus an empty app toolset when the
+      feature is disabled or no publishable snapshot exists.
+- [ ] Add tests that prove bundle detection and bundle-owned state resolution.
 
 ### Phase Dependencies
 
-- Phase 2 depends on Phase 1 because the service contract depends on the
-  config schema and bundle package being named and rooted correctly.
-- Phase 3 depends on Phase 2 because the bundle must consume the finalized
-  shared-state contract rather than redefining it locally.
-- Milestone 2 depends on this milestone establishing stable service and bundle
-  ownership boundaries.
+- Phase 2 depends on Phase 1 because the state contract depends on the final
+  bundle package root and config schema.
+- Phase 3 depends on Phase 2 because the bridge should consume the finalized
+  bundle-owned state contract rather than redefining it locally.
+- Milestone 2 depends on this milestone establishing stable bundle ownership
+  boundaries.
 
 ---
 
@@ -254,33 +227,29 @@ Integration tests:
 
 - Verify the new `extensions/openai-chatgpt-apps-bundle/` package is loaded as
   a Codex bundle and contributes exactly one stdio MCP server.
-- Verify enabling `chatgptApps` registers the native service without modifying
-  or extending OpenClaw runtime service behavior.
 - Verify top-level `mcp.servers` still overrides bundle defaults with the new
   bundle installed.
-- Verify the bridge startup path returns diagnostics and no app tools when
-  `control.json` is missing or malformed.
+- Verify the bridge startup path returns diagnostics and no app tools when the
+  feature is disabled or no snapshot is present.
 
 Unit tests:
 
-- Validate shared-state path helpers produce one stable namespaced root for the
-  native service and bundle.
-- Validate control protocol serialization and metadata file shape.
-- Validate the lightweight service startup path does not attempt to spawn
-  `codex app-server`.
-- Validate service startup remains non-failing when `chatgptApps.enabled = true`
-  but the bundle is not installed.
+- Validate `state-paths.ts` produces one stable namespaced root under
+  `OPENCLAW_STATE_DIR/plugin-runtimes/openai-chatgpt-apps/`.
+- Validate config normalization and feature gating behavior.
+- Validate the bridge bootstrap path does not attempt to require a native
+  service or control socket.
 
 Manual validation:
 
 - Install dependencies for the new bundle package locally and confirm the
   package is discoverable as bundle format `codex`.
 - Enable `plugins.entries.openai.config.chatgptApps.enabled` and confirm the
-  service starts without connector refresh or sidecar spawn.
-- Inspect the namespaced shared-state directory and confirm `control.json`
-  exists with the expected shape.
-- Temporarily remove or invalidate `control.json` and confirm the bridge emits
-  diagnostics rather than trying to start its own fallback process.
+  bundle bridge starts without native service registration.
+- Inspect the bundle-owned state root and confirm the expected directory layout
+  can be created.
+- Confirm the bridge returns no tools yet instead of failing when no snapshot
+  has been created.
 
 ---
 
@@ -290,8 +259,8 @@ Manual validation:
       criteria.
 - [ ] Validation results are run or explicitly recorded with any follow-up work
       captured for Milestones 2 and 3.
-- [ ] The design doc and Milestone 1 spec remain aligned on service ownership,
-      bundle ownership, and shared-state contracts.
+- [ ] The design doc and Milestone 1 spec remain aligned on bundle-only
+      ownership and bundle-owned state contracts.
 
 ---
 
@@ -300,19 +269,18 @@ Manual validation:
 ### Open Items
 
 - [ ] Decide whether the bundle server name should be `openai-chatgpt-apps` or
-      another stable id before implementation starts.
+      another stable id before implementation starts. - Answer: it should be`openai-chatgpt-apps`
 - [ ] Confirm whether the bundle package should be added to any existing docs
-      indices or plugin catalogs in the same implementation PR.
+      indices or plugin catalogs in the same implementation PR. - Answer: Add docs to docs/providers/openai.md
 
 ### Risks and Mitigations
 
-| Risk                                                                                            | Impact | Probability | Mitigation                                                                                                          |
-| ----------------------------------------------------------------------------------------------- | ------ | ----------- | ------------------------------------------------------------------------------------------------------------------- |
-| Bundle placement accidentally collides with native plugin detection rules                       | High   | Med         | Keep the bundle in a separate package root and validate bundle detection explicitly in tests                        |
-| Service and bundle choose different shared-state paths                                          | High   | Med         | Centralize path computation in one `state-paths.ts` module used by both sides                                       |
-| Lightweight service startup still performs hidden work at gateway boot                          | Med    | Med         | Add tests around `start(...)` behavior and keep sidecar launch out of Milestone 1 code paths                        |
-| The service and bridge disagree on how "not ready yet" is represented over the control protocol | High   | Med         | Define the control response shape in this milestone and add serialization tests before refresh logic is implemented |
-| The local `file:` SDK dependency breaks installs on machines without the local repo             | Med    | High        | Treat it as local-only for this milestone and document the constraint in the spec and package metadata              |
+| Risk                                                                                | Impact | Probability | Mitigation                                                                                             |
+| ----------------------------------------------------------------------------------- | ------ | ----------- | ------------------------------------------------------------------------------------------------------ |
+| Bundle placement accidentally collides with native plugin detection rules           | High   | Med         | Keep the bundle in a separate package root and validate bundle detection explicitly in tests           |
+| Bundle code derives a different state path across entrypoints                       | High   | Med         | Centralize path computation in one `state-paths.ts` module used by all bundle code                     |
+| The bridge accidentally grows service-style assumptions back into the design        | Med    | Med         | Keep Milestone 1 free of service-client or control-protocol files and validate ownership in review     |
+| The local `file:` SDK dependency breaks installs on machines without the local repo | Med    | High        | Treat it as local-only for this milestone and document the constraint in the spec and package metadata |
 
 ### Simplifications and Assumptions
 
@@ -333,4 +301,5 @@ Manual validation:
 
 ## Changelog
 
+- 2026-03-28: Updated Milestone 1 to the bundle-only architecture by removing native service ownership and defining the bundle-owned runtime cache contract under `OPENCLAW_STATE_DIR`. (019d37da-b9a9-72b1-9bda-231d842ceb58 - (cc55b9534a))
 - 2026-03-28: Created the Milestone 1 feature spec for the ChatGPT apps native service and bundle skeleton. (019d37da-b9a9-72b1-9bda-231d842ceb58 - (2638b566f1694da1a8248efc99f7fc94fbb59b94))
