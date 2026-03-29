@@ -100,6 +100,42 @@ describe("resolveChatgptAppsProjectedAuth", () => {
     });
   });
 
+  it("uses the stored credential directly when it is still fresh", async () => {
+    authMocks.ensureAuthProfileStore.mockReturnValue({
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "stored-access",
+          refresh: "refresh-token",
+          accountId: "acct_stored",
+          email: "kevinlin@openai.com",
+          expires: Date.now() + 10 * 60_000,
+        },
+      },
+    });
+
+    const result = await resolveChatgptAppsProjectedAuth({
+      config: {},
+      agentDir: "/tmp/agent",
+    });
+
+    expect(runtimeEnvMocks.ensureGlobalUndiciEnvProxyDispatcher).not.toHaveBeenCalled();
+    expect(oauthMocks.refreshOpenAICodexToken).not.toHaveBeenCalled();
+    expect(authMocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      status: "ok",
+      accessToken: "stored-access",
+      accountId: "acct_stored",
+      planType: null,
+      identity: {
+        email: "kevinlin@openai.com",
+        profileName: "kevinlin@openai.com",
+      },
+      profileId: "openai-codex:default",
+    });
+  });
+
   it("falls back to the stored credential when refresh fails", async () => {
     authMocks.ensureAuthProfileStore.mockReturnValue({
       profiles: {
@@ -110,6 +146,7 @@ describe("resolveChatgptAppsProjectedAuth", () => {
           refresh: "refresh-token",
           accountId: "acct_stored",
           email: "kevinlin@openai.com",
+          expires: 1,
         },
       },
     });

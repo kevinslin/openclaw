@@ -86,11 +86,30 @@ function resolveStoredOauthCredential(params: { config: OpenClawConfig; agentDir
   };
 }
 
+function shouldRefreshOauthCredential(credential: OAuthCredential): boolean {
+  const refreshToken = normalizeOptionalString(credential.refresh);
+  if (!refreshToken) {
+    return false;
+  }
+  if (!normalizeOptionalString(credential.access)) {
+    return true;
+  }
+  const expiresAt = typeof credential.expires === "number" ? credential.expires : null;
+  if (!Number.isFinite(expiresAt)) {
+    return false;
+  }
+  return (expiresAt as number) <= Date.now() + 60_000;
+}
+
 async function resolveFreshOauthCredential(params: {
   agentDir?: string;
   profileId: string;
   credential: OAuthCredential;
 }): Promise<OAuthCredential> {
+  if (!shouldRefreshOauthCredential(params.credential)) {
+    return params.credential;
+  }
+
   const refreshToken = normalizeOptionalString(params.credential.refresh);
   if (!refreshToken) {
     return params.credential;
@@ -104,7 +123,7 @@ async function resolveFreshOauthCredential(params: {
       type: "oauth",
       provider: "openai-codex",
       access: refreshed.access,
-      refresh: refreshToken,
+      refresh: normalizeOptionalString(refreshed.refresh) ?? refreshToken,
       expires: refreshed.expires,
       accountId: normalizeOptionalString(refreshed.accountId) ?? params.credential.accountId,
       email: params.credential.email,
