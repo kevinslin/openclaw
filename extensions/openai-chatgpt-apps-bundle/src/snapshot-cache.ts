@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { protocol } from "codex-sdk-ts";
+import type { protocol } from "codex-app-server-sdk";
 import type { ChatgptAppsStatePaths } from "./state-paths.js";
 
 type AppInfo = protocol.v2.AppInfo;

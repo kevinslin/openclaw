@@ -1,5 +1,5 @@
 import { mkdir } from "node:fs/promises";
-import { CodexAppServerClient, type protocol } from "codex-sdk-ts";
+import { CodexAppServerClient, type protocol } from "codex-app-server-sdk";
 import { resolveAppServerCommand } from "./app-server-command.js";
 import type { ChatgptAppsResolvedAuth } from "./auth-projector.js";
 import type { ChatgptAppsConfig } from "./config.js";

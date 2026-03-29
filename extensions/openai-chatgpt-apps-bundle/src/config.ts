@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { protocol } from "codex-sdk-ts";
+import type { protocol } from "codex-app-server-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 
 type AppsDefaultConfig = protocol.v2.AppsDefaultConfig;

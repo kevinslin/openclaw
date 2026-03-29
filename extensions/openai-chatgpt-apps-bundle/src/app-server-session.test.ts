@@ -1,4 +1,4 @@
-import type { protocol } from "codex-sdk-ts";
+import type { protocol } from "codex-app-server-sdk";
 import { describe, expect, it } from "vitest";
 import { captureAppServerSnapshot } from "./app-server-session.js";
 import type { ChatgptAppsConfig } from "./config.js";

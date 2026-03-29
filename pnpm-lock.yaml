@@ -553,9 +553,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.28.0
         version: 1.28.0(zod@4.3.6)
-      codex-sdk-ts:
-        specifier: file:/Users/kevinlin/code/codex-sdk-ts
-        version: file:../codex-sdk-ts
+      codex-app-server-sdk:
+        specifier: 0.1.0
+        version: 0.1.0
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
@@ -4003,8 +4003,8 @@ packages:
   codec-parser@2.5.0:
     resolution: {integrity: sha512-Ru9t80fV8B0ZiixQl8xhMTLru+dzuis/KQld32/x5T/+3LwZb0/YvQdSKytX9JqCnRdiupvAvyYJINKrXieziQ==}
 
-  codex-sdk-ts@file:../codex-sdk-ts:
-    resolution: {directory: ../codex-sdk-ts, type: directory}
+  codex-app-server-sdk@0.1.0:
+    resolution: {integrity: sha512-vYz8B9PSgyKcvBYYpFzm7g/aTVC7HPDwdKmrdFgAT76vfFy5aA5tMCJDVVcw9jDRdYlkgE6bHDDb68gBrevh7w==}
     engines: {node: '>=20'}
 
   color-convert@2.0.1:
@@ -10520,7 +10520,7 @@ snapshots:
   codec-parser@2.5.0:
     optional: true
 
-  codex-sdk-ts@file:../codex-sdk-ts: {}
+  codex-app-server-sdk@0.1.0: {}
 
   color-convert@2.0.1:
     dependencies:
