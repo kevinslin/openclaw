@@ -5,6 +5,7 @@
   "description": "Bundle-owned MCP bridge for exposing ChatGPT apps in OpenClaw",
   "type": "module",
   "dependencies": {
+    "@mariozechner/pi-ai": "0.63.2",
     "@modelcontextprotocol/sdk": "1.28.0",
     "codex-app-server-sdk": "0.1.0",
     "tsx": "^4.21.0"

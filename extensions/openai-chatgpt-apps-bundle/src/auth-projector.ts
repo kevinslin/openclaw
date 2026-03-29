@@ -1,5 +1,11 @@
+import { refreshOpenAICodexToken } from "@mariozechner/pi-ai/oauth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { ensureAuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
+import {
+  ensureAuthProfileStore,
+  type OAuthCredential,
+  upsertAuthProfileWithLock,
+} from "openclaw/plugin-sdk/provider-auth";
+import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
 
 export type ChatgptAppsResolvedAuth =
@@ -33,11 +39,7 @@ function normalizeOptionalString(value: unknown): string | undefined {
 
 function resolveStoredOauthCredential(params: { config: OpenClawConfig; agentDir?: string }): {
   profileId: string | null;
-  credential: {
-    accessToken: string;
-    accountId?: string;
-    email?: string;
-  } | null;
+  credential: OAuthCredential | null;
 } {
   const store = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
@@ -61,8 +63,11 @@ function resolveStoredOauthCredential(params: { config: OpenClawConfig; agentDir
   }
 
   const credential = store.profiles[profileId];
-  const accessToken =
-    credential?.type === "oauth" ? normalizeOptionalString(credential.access) : undefined;
+  if (credential?.type !== "oauth") {
+    return { profileId, credential: null };
+  }
+
+  const accessToken = normalizeOptionalString(credential.access);
   if (!accessToken) {
     return { profileId, credential: null };
   }
@@ -70,12 +75,50 @@ function resolveStoredOauthCredential(params: { config: OpenClawConfig; agentDir
   return {
     profileId,
     credential: {
-      accessToken,
+      ...credential,
+      access: accessToken,
       accountId:
         credential?.type === "oauth" ? normalizeOptionalString(credential.accountId) : undefined,
       email: credential?.type === "oauth" ? normalizeOptionalString(credential.email) : undefined,
+      displayName:
+        credential?.type === "oauth" ? normalizeOptionalString(credential.displayName) : undefined,
     },
   };
+}
+
+async function resolveFreshOauthCredential(params: {
+  agentDir?: string;
+  profileId: string;
+  credential: OAuthCredential;
+}): Promise<OAuthCredential> {
+  const refreshToken = normalizeOptionalString(params.credential.refresh);
+  if (!refreshToken) {
+    return params.credential;
+  }
+
+  try {
+    ensureGlobalUndiciEnvProxyDispatcher();
+    const refreshed = await refreshOpenAICodexToken(refreshToken);
+    const nextCredential: OAuthCredential = {
+      ...params.credential,
+      type: "oauth",
+      provider: "openai-codex",
+      access: refreshed.access,
+      refresh: refreshToken,
+      expires: refreshed.expires,
+      accountId: normalizeOptionalString(refreshed.accountId) ?? params.credential.accountId,
+      email: params.credential.email,
+      displayName: params.credential.displayName,
+    };
+    await upsertAuthProfileWithLock({
+      agentDir: params.agentDir,
+      profileId: params.profileId,
+      credential: nextCredential,
+    });
+    return nextCredential;
+  } catch {
+    return params.credential;
+  }
 }
 
 export async function resolveChatgptAppsProjectedAuth(params: {
@@ -92,20 +135,32 @@ export async function resolveChatgptAppsProjectedAuth(params: {
       };
     }
 
-    const resolved = initial.credential;
-    if (!resolved?.accessToken) {
+    const storedCredential = initial.credential;
+    if (!storedCredential) {
       return {
         status: "missing-auth",
         message: "OpenAI Codex OAuth is not configured in OpenClaw.",
       };
     }
 
-    const accessToken = resolved.accessToken;
+    const resolved = await resolveFreshOauthCredential({
+      agentDir: params.agentDir,
+      profileId,
+      credential: storedCredential,
+    });
+    if (!normalizeOptionalString(resolved.access)) {
+      return {
+        status: "missing-auth",
+        message: "OpenAI Codex OAuth is not configured in OpenClaw.",
+      };
+    }
+
+    const accessToken = resolved.access;
     const identity = resolveCodexAuthIdentity({
       accessToken,
-      email: resolved.email,
+      email: normalizeOptionalString(resolved.email),
     });
-    const accountId = resolved.accountId;
+    const accountId = normalizeOptionalString(resolved.accountId);
 
     if (!accountId) {
       return {

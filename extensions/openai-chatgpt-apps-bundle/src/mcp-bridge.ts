@@ -7,7 +7,7 @@ import {
   type CallToolResult,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
-import type { protocol } from "codex-sdk-ts";
+import type { protocol } from "codex-app-server-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveChatgptAppsProjectedAuth } from "./auth-projector.js";
 import { hashChatgptAppsConfig, hashChatgptBaseUrl, resolveChatgptAppsConfig } from "./config.js";
@@ -653,6 +653,24 @@ export class ChatgptAppsMcpBridge {
   private async getPublicationState(): Promise<PublicationState> {
     const openclawConfig = this.loadOpenClawConfig();
     const config = resolveChatgptAppsConfig(openclawConfig.plugins?.entries?.openai?.config ?? {});
+    const hardRefresh = this.consumeHardRefresh();
+    if (hardRefresh) {
+      const refreshResult = await this.ensureFreshSnapshot({
+        loadOpenClawConfig: this.loadOpenClawConfig,
+        env: this.env,
+        workspaceDir: this.workspaceDir,
+        hardRefresh: true,
+        refreshTimeoutMs: INITIAL_WILDCARD_REFRESH_TIMEOUT_MS,
+      });
+      if (refreshResult.status === "ok") {
+        return {
+          kind: "snapshot",
+          config: refreshResult.config,
+          snapshot: refreshResult.snapshot,
+        };
+      }
+    }
+
     const statePaths = resolveChatgptAppsStatePaths(this.env);
     const snapshot = await readPersistedSnapshot(statePaths.snapshotPath);
     if (snapshot) {
@@ -669,7 +687,7 @@ export class ChatgptAppsMcpBridge {
         loadOpenClawConfig: this.loadOpenClawConfig,
         env: this.env,
         workspaceDir: this.workspaceDir,
-        hardRefresh: this.consumeHardRefresh(),
+        hardRefresh: false,
         refreshTimeoutMs: INITIAL_WILDCARD_REFRESH_TIMEOUT_MS,
       });
       if (refreshResult.status === "ok") {
@@ -775,6 +793,7 @@ export class ChatgptAppsMcpBridge {
             ),
           )
         : await this.listRemoteTools(config.chatgptBaseUrl);
+    const remoteToolPrefixCounts = buildRemoteToolPrefixCounts(remoteTools);
     const remoteToolConnectorMap = buildRemoteToolConnectorMap({
       statuses: snapshot.statuses,
       allowedConnectorIds,
@@ -783,7 +802,8 @@ export class ChatgptAppsMcpBridge {
     for (const tool of remoteTools) {
       const connectorId =
         remoteToolConnectorMap.get(tool.name) ??
-        resolveConnectorIdForRemoteToolName(tool.name, allowedConnectorIds);
+        resolveConnectorIdForRemoteToolName(tool.name, allowedConnectorIds) ??
+        resolveConnectorIdFromRemoteToolNamePrefix(tool.name, remoteToolPrefixCounts);
       if (!connectorId) {
         continue;
       }

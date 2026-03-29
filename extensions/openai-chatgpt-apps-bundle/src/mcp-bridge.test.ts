@@ -602,6 +602,181 @@ describe("ChatgptAppsMcpBridge", () => {
     ]);
   });
 
+  it("uses an explicit hard refresh before serving a persisted snapshot", async () => {
+    const stateDir = await createStateDir();
+    await writeSnapshot(stateDir);
+
+    const refreshedSnapshot = createPersistedSnapshot();
+    refreshedSnapshot.inventory[0] = {
+      ...refreshedSnapshot.inventory[0],
+      id: "gmail",
+      name: "Gmail",
+      pluginDisplayNames: ["Gmail"],
+    };
+    refreshedSnapshot.statuses[0] = {
+      ...refreshedSnapshot.statuses[0],
+      name: "gmail",
+      tools: {
+        gmail_search_emails: {
+          name: "gmail_search_emails",
+          description: "Search Gmail",
+          _meta: {
+            connector_id: "gmail",
+          },
+          inputSchema: {
+            type: "object",
+            properties: {
+              query: { type: "string" },
+            },
+          },
+        },
+      },
+    } as PersistedConnectorSnapshot["statuses"][number];
+
+    const ensureFreshSnapshot = vi.fn(async () => ({
+      status: "ok" as const,
+      source: "refresh" as const,
+      snapshot: refreshedSnapshot,
+      config: {
+        enabled: true,
+        chatgptBaseUrl: "https://chatgpt.com",
+        appServer: { command: "codex", args: [] },
+        linking: {
+          enabled: false,
+          waitTimeoutMs: 60_000,
+          pollIntervalMs: 3_000,
+        },
+        connectors: {
+          "*": { enabled: true },
+        },
+      },
+      openclawConfig: createWildcardConfig(),
+      statePaths: resolveChatgptAppsStatePaths({
+        OPENCLAW_STATE_DIR: stateDir,
+        HOME: os.tmpdir(),
+      }),
+    }));
+
+    const bridge = new ChatgptAppsMcpBridge({
+      loadOpenClawConfig: () => createWildcardConfig(),
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+      hardRefresh: true,
+      ensureFreshSnapshot,
+      resolveProjectedAuth: async () => ({
+        status: "ok",
+        accessToken: "access-token",
+        accountId: "acct_123",
+        planType: null,
+        profileId: "openai-codex:default",
+        identity: { email: "user@example.com", profileName: "user@example.com" },
+      }),
+      remoteClientFactory: async () => ({
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({
+          content: [{ type: "text", text: "ok" }],
+        }),
+        close: async () => {},
+      }),
+    });
+
+    await expect(bridge.listTools()).resolves.toEqual([
+      expect.objectContaining({
+        name: "chatgpt_app__gmail__gmail_search_emails",
+      }),
+    ]);
+    expect(ensureFreshSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hardRefresh: true,
+      }),
+    );
+  });
+
+  it("routes snapshot-published remote tools whose connector prefix contains spaces", async () => {
+    const snapshot = createPersistedSnapshot();
+    snapshot.inventory = [
+      {
+        id: "connector_947e0d954944416db111db556030eea6",
+        name: "Google Calendar",
+        description: null,
+        logoUrl: null,
+        logoUrlDark: null,
+        distributionChannel: null,
+        branding: null,
+        appMetadata: null,
+        labels: null,
+        installUrl: null,
+        isAccessible: true,
+        isEnabled: true,
+        pluginDisplayNames: [],
+      },
+    ];
+    snapshot.statuses = [];
+
+    const bridge = new ChatgptAppsMcpBridge({
+      loadOpenClawConfig: () => createWildcardConfig(),
+      ensureFreshSnapshot: async () => ({
+        status: "ok",
+        source: "refresh",
+        snapshot,
+        config: {
+          enabled: true,
+          chatgptBaseUrl: "https://chatgpt.com",
+          appServer: { command: "codex", args: [] },
+          linking: {
+            enabled: false,
+            waitTimeoutMs: 60_000,
+            pollIntervalMs: 3_000,
+          },
+          connectors: {
+            "*": { enabled: true },
+          },
+        },
+        openclawConfig: createWildcardConfig(),
+        statePaths: resolveChatgptAppsStatePaths({
+          OPENCLAW_STATE_DIR: path.join(os.tmpdir(), "openclaw-chatgpt-apps-bridge"),
+          HOME: os.tmpdir(),
+        }),
+      }),
+      resolveProjectedAuth: async () => ({
+        status: "ok",
+        accessToken: "access-token",
+        accountId: "acct_123",
+        planType: null,
+        profileId: "openai-codex:default",
+        identity: { email: "user@example.com", profileName: "user@example.com" },
+      }),
+      remoteClientFactory: async () => ({
+        listTools: async () => ({
+          tools: [
+            {
+              name: "google calendar_search_events",
+              description: "Search calendar events",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  query: { type: "string" },
+                },
+              },
+            },
+          ] satisfies Tool[],
+        }),
+        callTool: async () => ({
+          content: [{ type: "text", text: "ok" }],
+        }),
+        close: async () => {},
+      }),
+    });
+
+    await expect(bridge.listTools()).resolves.toEqual([
+      expect.objectContaining({
+        name: "chatgpt_app__google_calendar__google calendar_search_events",
+      }),
+    ]);
+  });
+
   it("does not block tools/list on background snapshot refresh", async () => {
     const listTools = vi.fn(async () => ({
       tools: [
