@@ -13,4 +13,4 @@
 
 ## Constant Overrides
 
-- $DOCS_ROOT: `extensions/openai-apps`: any skill using DOCS_ROOT should have it be set to `extensions/openai-apps`
+- $DOCS_ROOT: `extensions/openai-apps/docs`: any skill using DOCS_ROOT should have it be set to `extensions/openai-apps/docs`
