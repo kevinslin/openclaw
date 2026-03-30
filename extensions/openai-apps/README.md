@@ -168,6 +168,23 @@ Example:
 }
 ```
 
+## Integration Tests
+
+Run the integration suite through the repo-level wrapper in `scripts/`:
+
+```bash
+./scripts/test-chatapps-integ.sh simple
+./scripts/test-chatapps-integ.sh full
+```
+
+Mode coverage:
+
+- `simple`: runs `list tools` plus the Gmail call.
+- `full`: runs `list tools`, Gmail, Linear, and Google Calendar.
+
+The wrapper delegates to the `openai-apps` integration harness and writes
+artifacts under `/tmp/claw-chat-apps/`.
+
 ## Appendix
 
 ### Calls to App Server
