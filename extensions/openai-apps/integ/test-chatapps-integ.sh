@@ -63,15 +63,37 @@ DEV_ENV=(
   OPENCLAW_AGENT_DIR="$DEV_AGENT_DIR"
 )
 
+terminate_process() {
+  local pid="$1"
+  if [[ -z "$pid" ]]; then
+    return 0
+  fi
+
+  if ! kill -0 "$pid" >/dev/null 2>&1; then
+    wait "$pid" >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  kill "$pid" >/dev/null 2>&1 || true
+  for _ in $(seq 1 10); do
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      wait "$pid" >/dev/null 2>&1 || true
+      return 0
+    fi
+    sleep 1
+  done
+
+  kill -9 "$pid" >/dev/null 2>&1 || true
+  wait "$pid" >/dev/null 2>&1 || true
+}
+
 cleanup() {
   local status=$?
   for pid in "${TUI_PIDS[@]:-}"; do
-    kill "$pid" >/dev/null 2>&1 || true
-    wait "$pid" >/dev/null 2>&1 || true
+    terminate_process "$pid"
   done
   if [[ "$STARTED_GATEWAY" -eq 1 && -n "$GATEWAY_PID" ]]; then
-    kill "$GATEWAY_PID" >/dev/null 2>&1 || true
-    wait "$GATEWAY_PID" >/dev/null 2>&1 || true
+    terminate_process "$GATEWAY_PID"
   fi
   exit "$status"
 }
@@ -462,9 +484,18 @@ run_tui_check_once() {
     sleep 2
   done
 
-  kill "$tui_pid" >/dev/null 2>&1 || true
-  wait "$tui_pid" >/dev/null 2>&1 || true
-  TUI_PIDS=("${TUI_PIDS[@]/$tui_pid}")
+  terminate_process "$tui_pid"
+  local -a remaining_pids=()
+  for existing_pid in "${TUI_PIDS[@]:-}"; do
+    if [[ "$existing_pid" != "$tui_pid" ]]; then
+      remaining_pids+=("$existing_pid")
+    fi
+  done
+  if (( ${#remaining_pids[@]} > 0 )); then
+    TUI_PIDS=("${remaining_pids[@]}")
+  else
+    TUI_PIDS=()
+  fi
 
   if [[ "$success" -ne 1 ]]; then
     if [[ "$saw_error" -eq 1 ]]; then
