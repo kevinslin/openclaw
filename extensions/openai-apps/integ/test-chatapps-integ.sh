@@ -47,20 +47,26 @@ GCAL_SESSION="smoke-gcal-chatapps-${SESSION_SUFFIX}"
 
 REPO_DIR="/Users/kevinlin/code/openclaw"
 TRANSCRIPT_READER="/Users/kevinlin/code/kl-oai-skills/claw-conn-debug/scripts/read_tui_session.py"
-DEV_STATE_DIR="${HOME}/.openclaw-dev"
-DEV_CONFIG_PATH="${DEV_STATE_DIR}/openclaw.json"
-DEV_AGENT_DIR="${DEV_STATE_DIR}/agents/dev/agent"
+INTEG_PROFILE="chatapps-integ"
+INTEG_STATE_DIR="${HOME}/.openclaw-${INTEG_PROFILE}"
+INTEG_CONFIG_PATH="${INTEG_STATE_DIR}/openclaw.json"
+INTEG_AGENT_ID="${INTEG_PROFILE}"
+INTEG_AGENT_DIR="${INTEG_STATE_DIR}/agents/${INTEG_AGENT_ID}/agent"
+INTEG_MAIN_AGENT_DIR="${INTEG_STATE_DIR}/agents/main/agent"
+INTEG_AGENT_AUTH_PATH="${INTEG_AGENT_DIR}/auth-profiles.json"
+INTEG_MAIN_AUTH_PATH="${INTEG_MAIN_AGENT_DIR}/auth-profiles.json"
 
 GATEWAY_PID=""
 STARTED_GATEWAY=0
-GATEWAY_PORT="19001"
+GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-19011}"
 RUN_NODE_PATH="${REPO_DIR}/scripts/run-node.mjs"
 TUI_PIDS=()
-DEV_ENV=(
-  OPENCLAW_PROFILE=dev
-  OPENCLAW_STATE_DIR="$DEV_STATE_DIR"
-  OPENCLAW_CONFIG_PATH="$DEV_CONFIG_PATH"
-  OPENCLAW_AGENT_DIR="$DEV_AGENT_DIR"
+INTEG_ENV=(
+  OPENCLAW_PROFILE="$INTEG_PROFILE"
+  OPENCLAW_STATE_DIR="$INTEG_STATE_DIR"
+  OPENCLAW_CONFIG_PATH="$INTEG_CONFIG_PATH"
+  OPENCLAW_AGENT_DIR="$INTEG_AGENT_DIR"
+  OPENCLAW_GATEWAY_PORT="$GATEWAY_PORT"
 )
 
 terminate_process() {
@@ -176,16 +182,251 @@ require_prereqs() {
   ) || fail "uvx showboat is not available"
 }
 
-prepare_dev_profile() {
-  mkdir -p "$DEV_STATE_DIR" "$DEV_AGENT_DIR"
+auth_store_has_openai_codex_login() {
+  local auth_path="$1"
+
+  python3 - "$auth_path" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+auth_path = Path(sys.argv[1])
+if not auth_path.is_file():
+    raise SystemExit(1)
+
+try:
+    raw = json.loads(auth_path.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+
+profiles = raw.get("profiles")
+if not isinstance(profiles, dict):
+    raise SystemExit(1)
+
+for credential in profiles.values():
+    if not isinstance(credential, dict):
+        continue
+    if credential.get("type") != "oauth":
+        continue
+    if credential.get("provider") != "openai-codex":
+        continue
+    access = credential.get("access")
+    account_id = credential.get("accountId")
+    if isinstance(access, str) and access.strip() and isinstance(account_id, str) and account_id.strip():
+        raise SystemExit(0)
+
+raise SystemExit(1)
+PY
+}
+
+find_profile_config_source() {
+  python3 - "$HOME" "$INTEG_STATE_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+home = Path(sys.argv[1]).expanduser()
+target_state_dir = Path(sys.argv[2]).expanduser().resolve()
+
+state_dirs = []
+default_state_dir = home / ".openclaw"
+if default_state_dir.is_dir() and default_state_dir.resolve() != target_state_dir:
+    state_dirs.append(default_state_dir)
+
+for candidate in sorted(home.glob(".openclaw-*")):
+    if not candidate.is_dir():
+        continue
+    if candidate.resolve() == target_state_dir:
+        continue
+    state_dirs.append(candidate)
+
+for state_dir in state_dirs:
+    config_path = state_dir / "openclaw.json"
+    if config_path.is_file():
+        print(config_path)
+        raise SystemExit(0)
+
+raise SystemExit(1)
+PY
+}
+
+find_openai_codex_auth_source() {
+  python3 - "$HOME" "$INTEG_STATE_DIR" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+home = Path(sys.argv[1]).expanduser()
+target_state_dir = Path(sys.argv[2]).expanduser().resolve()
+
+def has_reusable_openai_codex_auth(auth_path: Path) -> bool:
+    if not auth_path.is_file():
+        return False
+    try:
+        raw = json.loads(auth_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    profiles = raw.get("profiles")
+    if not isinstance(profiles, dict):
+        return False
+    for credential in profiles.values():
+        if not isinstance(credential, dict):
+            continue
+        if credential.get("type") != "oauth":
+            continue
+        if credential.get("provider") != "openai-codex":
+            continue
+        access = credential.get("access")
+        account_id = credential.get("accountId")
+        if isinstance(access, str) and access.strip() and isinstance(account_id, str) and account_id.strip():
+            return True
+    return False
+
+state_dirs = []
+default_state_dir = home / ".openclaw"
+if default_state_dir.is_dir() and default_state_dir.resolve() != target_state_dir:
+    state_dirs.append(default_state_dir)
+
+for candidate in sorted(home.glob(".openclaw-*")):
+    if not candidate.is_dir():
+        continue
+    if candidate.resolve() == target_state_dir:
+        continue
+    state_dirs.append(candidate)
+
+for state_dir in state_dirs:
+    candidates = []
+    main_auth = state_dir / "agents" / "main" / "agent" / "auth-profiles.json"
+    if main_auth.is_file():
+        candidates.append(main_auth)
+    for auth_path in sorted((state_dir / "agents").glob("*/agent/auth-profiles.json")):
+        if auth_path not in candidates:
+            candidates.append(auth_path)
+    for auth_path in candidates:
+        if has_reusable_openai_codex_auth(auth_path):
+            print(auth_path)
+            raise SystemExit(0)
+
+raise SystemExit(1)
+PY
+}
+
+ensure_integration_profile_config() {
+  mkdir -p \
+    "$INTEG_STATE_DIR" \
+    "$INTEG_AGENT_DIR" \
+    "${INTEG_STATE_DIR}/agents/${INTEG_AGENT_ID}/sessions" \
+    "$INTEG_MAIN_AGENT_DIR" \
+    "${INTEG_STATE_DIR}/agents/main/sessions"
+
+  if [[ ! -f "$INTEG_CONFIG_PATH" ]]; then
+    local source_config=""
+    source_config="$(find_profile_config_source || true)"
+    if [[ -n "$source_config" ]]; then
+      cp "$source_config" "$INTEG_CONFIG_PATH"
+    else
+      printf '{}\n' >"$INTEG_CONFIG_PATH"
+    fi
+  fi
+
+  python3 - "$INTEG_CONFIG_PATH" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+config_path = Path(sys.argv[1])
+
+try:
+    raw = json.loads(config_path.read_text(encoding="utf-8"))
+except Exception:
+    raw = {}
+
+if not isinstance(raw, dict):
+    raw = {}
+
+plugins = raw.setdefault("plugins", {})
+if not isinstance(plugins, dict):
+    plugins = {}
+    raw["plugins"] = plugins
+
+entries = plugins.setdefault("entries", {})
+if not isinstance(entries, dict):
+    entries = {}
+    plugins["entries"] = entries
+
+openai_entry = entries.setdefault("openai", {})
+if not isinstance(openai_entry, dict):
+    openai_entry = {}
+    entries["openai"] = openai_entry
+openai_entry["enabled"] = True
+
+apps_entry = entries.setdefault("openai-apps", {})
+if not isinstance(apps_entry, dict):
+    apps_entry = {}
+    entries["openai-apps"] = apps_entry
+apps_entry["enabled"] = True
+
+apps_config = apps_entry.setdefault("config", {})
+if not isinstance(apps_config, dict):
+    apps_config = {}
+    apps_entry["config"] = apps_config
+apps_config["enabled"] = True
+
+connectors = apps_config.setdefault("connectors", {})
+if not isinstance(connectors, dict):
+    connectors = {}
+    apps_config["connectors"] = connectors
+
+wildcard = connectors.setdefault("*", {})
+if not isinstance(wildcard, dict):
+    wildcard = {}
+    connectors["*"] = wildcard
+wildcard["enabled"] = True
+
+config_path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+PY
+}
+
+ensure_integration_profile_openai_auth() {
+  mkdir -p "$INTEG_AGENT_DIR" "$INTEG_MAIN_AGENT_DIR"
+
+  local existing_auth=""
+  if auth_store_has_openai_codex_login "$INTEG_AGENT_AUTH_PATH"; then
+    existing_auth="$INTEG_AGENT_AUTH_PATH"
+  elif auth_store_has_openai_codex_login "$INTEG_MAIN_AUTH_PATH"; then
+    existing_auth="$INTEG_MAIN_AUTH_PATH"
+  fi
+
+  if [[ -z "$existing_auth" ]]; then
+    existing_auth="$(find_openai_codex_auth_source || true)"
+  fi
+
+  if [[ -z "$existing_auth" ]]; then
+    fail "No OpenClaw profile has reusable openai-codex OAuth for ChatGPT apps. Log in first with 'openclaw models auth login --provider openai-codex' in any OpenClaw profile, then rerun this integration test."
+  fi
+
+  if [[ "$existing_auth" != "$INTEG_MAIN_AUTH_PATH" ]]; then
+    cp "$existing_auth" "$INTEG_MAIN_AUTH_PATH"
+  fi
+  if [[ "$existing_auth" != "$INTEG_AGENT_AUTH_PATH" ]]; then
+    cp "$existing_auth" "$INTEG_AGENT_AUTH_PATH"
+  fi
+
+  if ! auth_store_has_openai_codex_login "$INTEG_AGENT_AUTH_PATH"; then
+    fail "integration profile auth copy did not produce a reusable openai-codex login"
+  fi
+}
+
+prepare_integration_profile() {
+  ensure_integration_profile_config
+  ensure_integration_profile_openai_auth
 
   if [[ -f "${REPO_DIR}/scripts/prepare-dev-profile.mjs" ]]; then
     (
       cd "$REPO_DIR"
-      env "${DEV_ENV[@]}" node scripts/prepare-dev-profile.mjs
+      env "${INTEG_ENV[@]}" node scripts/prepare-dev-profile.mjs
     )
-  elif [[ ! -f "$DEV_CONFIG_PATH" ]]; then
-    fail "dev profile config missing at ${DEV_CONFIG_PATH}"
+  elif [[ ! -f "$INTEG_CONFIG_PATH" ]]; then
+    fail "integration profile config missing at ${INTEG_CONFIG_PATH}"
   fi
 }
 
@@ -193,12 +434,12 @@ start_fresh_gateway() {
   terminate_matching_dev_processes
 
   if gateway_listening; then
-    return 0
+    fail "gateway port ${GATEWAY_PORT} is already in use; stop the existing listener or rerun with OPENCLAW_GATEWAY_PORT set to a free port"
   fi
 
   (
     cd "$REPO_DIR"
-    env OPENCLAW_SKIP_CHANNELS=1 "${DEV_ENV[@]}" \
+    env OPENCLAW_SKIP_CHANNELS=1 "${INTEG_ENV[@]}" \
       node scripts/run-node.mjs --dev gateway >"$GATEWAY_LOG" 2>&1 &
     echo $! >"${ROOT_DIR}/gateway.pid"
   )
@@ -216,7 +457,7 @@ capture_list_tools_summary() {
 
   (
     cd "$REPO_DIR"
-    env "${DEV_ENV[@]}" REQUIRED_PUBLISHED_TOOLS_JSON="$required_tools_json" \
+    env "${INTEG_ENV[@]}" REQUIRED_PUBLISHED_TOOLS_JSON="$required_tools_json" \
       node --input-type=module --import tsx <<'EOF' >"$LIST_TOOLS_SUMMARY_JSON"
 import { readFile } from "node:fs/promises";
 import os from "node:os";
@@ -399,9 +640,9 @@ capture_transcript_summary() {
   local output_path="$3"
 
   python3 "$TRANSCRIPT_READER" \
-    "agent:dev:${session}" \
-    --profile dev \
-    --agent dev \
+    "agent:main:${session}" \
+    --state-dir "$INTEG_STATE_DIR" \
+    --agent main \
     --expect-tool "$expected_tool" \
     >"$output_path"
 }
@@ -451,7 +692,7 @@ run_tui_check_once() {
 
   (
     cd "$REPO_DIR"
-    exec env "${DEV_ENV[@]}" \
+    exec env "${INTEG_ENV[@]}" \
       node scripts/run-node.mjs --dev tui \
       --session "$session" \
       --message "$message"
@@ -596,7 +837,7 @@ main() {
 
   prepare_output_dir
   require_prereqs
-  prepare_dev_profile
+  prepare_integration_profile
   start_fresh_gateway
   capture_list_tools_summary "$required_published_tools_json"
 
