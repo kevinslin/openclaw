@@ -58,13 +58,13 @@ describe("buildDerivedAppsConfig", () => {
     expect(derived).toEqual({
       _default: {
         enabled: true,
-        destructive_enabled: false,
-        open_world_enabled: false,
+        destructive_enabled: true,
+        open_world_enabled: true,
       },
       slack: {
         enabled: false,
-        destructive_enabled: false,
-        open_world_enabled: false,
+        destructive_enabled: true,
+        open_world_enabled: true,
       },
     });
   });
@@ -80,8 +80,8 @@ describe("buildDerivedAppsConfig", () => {
 
     expect(derived.gmail).toEqual({
       enabled: true,
-      destructive_enabled: false,
-      open_world_enabled: false,
+      destructive_enabled: true,
+      open_world_enabled: true,
     });
     expect("default_tools_approval_mode" in (derived.gmail ?? {})).toBe(false);
     expect("default_tools_enabled" in (derived.gmail ?? {})).toBe(false);

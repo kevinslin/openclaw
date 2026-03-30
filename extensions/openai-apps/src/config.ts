@@ -97,16 +97,16 @@ export function buildDerivedAppsConfig(config: ChatgptAppsConfig): DerivedAppsCo
       // The app-server persists this structure via TOML-backed config writes.
       // Omit optional null-valued keys so the sidecar never attempts to encode
       // JSON null into a TOML value.
-      destructive_enabled: false,
-      open_world_enabled: false,
+      destructive_enabled: true,
+      open_world_enabled: true,
     };
   }
 
   return {
     _default: {
       enabled: wildcardEnabled,
-      destructive_enabled: false,
-      open_world_enabled: false,
+      destructive_enabled: true,
+      open_world_enabled: true,
     },
     ...apps,
   };
