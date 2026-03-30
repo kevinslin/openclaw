@@ -50,24 +50,12 @@ refresh. That keeps an unnecessary dependency on app-server MCP status
 pagination and adds a hard-failure condition that is not fundamental to the new
 connector-level design.
 
-### Current State
+### Prior State
 
-- `captureAppServerSnapshot()` reads both paginated `app/list` and paginated
-  `legacy app-status RPC` before writing the persisted snapshot in
-  `extensions/openai-apps/src/app-server-session.ts`.
-- The persisted snapshot still stores `inventory: AppInfo[]` plus
-  `statuses: McpServerStatus[]` in `extensions/openai-apps/src/snapshot-cache.ts`,
-  even though publication is now connector-level.
-- `buildToolCacheFromSnapshot()` fails if status data is missing or incomplete in
-  `extensions/openai-apps/src/mcp-bridge.ts`.
-- `buildToolDescription()` still uses `Object.keys(status.tools ?? {}).length`
-  to add capability-count text to the published tool description in
-  `extensions/openai-apps/src/mcp-bridge.ts`.
-- The snapshot cache key still hashes `status.tools` names in
-  `extensions/openai-apps/src/snapshot-cache.ts`.
-- `availableToolNames` is still carried in the route type in
-  `extensions/openai-apps/src/app-server-invoker.ts`, but the current runtime
-  path does not rely on those names for invocation.
+Before this migration landed, refresh read both `app/list` and the legacy
+status RPC, persisted raw inventory/status arrays, and carried extra route and
+description logic tied to remote tool metadata. The implemented change removes
+that model entirely and leaves `app/list` as the only external refresh source.
 
 ### Required Pre-Read
 
@@ -108,7 +96,7 @@ connector-level design.
 | App invocation token             | bundle-derived from `AppInfo`                | normalized slug string             | during snapshot derivation                 | embedded in connector snapshot | `buildInvocationInput()`                  | Yes                         |
 | Published tool name              | bundle-derived from connector id             | `chatgpt_app_<connectorId>`        | during snapshot derivation                 | embedded in connector snapshot | `listTools()` / `callTool()` route lookup | Yes                         |
 | App accessibility and enablement | `AppInfo.isAccessible` / `AppInfo.isEnabled` | booleans                           | returned by `app/list`                     | embedded in connector snapshot | publication gating                        | Yes                         |
-| Tool capability count            | currently `legacy app-status RPC`            | number derived from `status.tools` | refresh session                            | snapshot write                 | tool description text only                | Yes, but should be removed  |
+| Tool capability count            | legacy status RPC                            | number derived from `status.tools` | refresh session                            | snapshot write                 | tool description text only                | Historical only             |
 
 The ordering problem is favorable here: every persisted value needed for
 connector-level publication can be derived before the snapshot is written, using
@@ -155,8 +143,7 @@ keeping one canonical structure.
   Why: publish tools and rebuild routes from snapshot connector metadata instead
   of status regrouping.
 - `extensions/openai-apps/src/app-server-invoker.ts`
-  Why: remove stale `availableToolNames` route baggage if it is not needed after
-  the snapshot redesign.
+  Why: remove stale route baggage left over from the pre-migration model.
 - `extensions/openai-apps/src/*.test.ts`
   Why: replace status-based expectations with app-list-only expectations.
 - `extensions/openai-apps/README.md`
@@ -181,8 +168,10 @@ keeping one canonical structure.
   - prefer normalized non-opaque `app.id`
   - otherwise use normalized `app.name`
   - otherwise use the first normalized `pluginDisplayNames` entry
-  - if two apps still collapse to the same connector id, keep the first base id
-    and suffix later collisions with a stable fragment derived from `app.id`
+  - if two apps still collapse to the same base connector id, assign the
+    unsuffixed base id to the lexicographically smallest `app.id` in that
+    collision group and suffix all others with a stable fragment derived from
+    `app.id`
 - Alias handling: `pluginDisplayNames` may be persisted for debugging and future
   explainability, but they do not create alternate published routes. Each app
   yields exactly one canonical connector record.
@@ -193,9 +182,8 @@ keeping one canonical structure.
   - no capability-count suffix
 - Validation model: publication completeness is defined by app-list-derived
   connector metadata, not by separate status coverage.
-- Runtime routing: top-level invocation does not need remote tool names, so
-  `availableToolNames` should be removed unless an implementation step proves a
-  remaining consumer.
+- Runtime routing: top-level invocation does not need remote tool names, and
+  the pre-migration route baggage has been removed.
 - Malformed snapshot behavior: malformed or incomplete connector records are a
   hard publication failure, not a degraded path or best-effort skip.
 
@@ -270,7 +258,7 @@ to preserve runtime behavior.
   invocation contract.
 - Snapshot derivation should fail during refresh if:
   - no canonical connector id can be derived for an app
-  - two apps resolve to the same canonical connector id
+  - two apps still collide after deterministic suffixing
 - Snapshot version should be bumped because the shape changes materially and old
   snapshots should be invalidated cleanly.
 - The cache key should hash only fields that affect connector-level publication
@@ -280,25 +268,26 @@ to preserve runtime behavior.
 
 ## Acceptance Criteria
 
-- [ ] `openai-apps` no longer calls app-server `legacy app-status RPC` during
+- [x] `openai-apps` no longer calls app-server `legacy app-status RPC` during
       refresh.
-- [ ] The persisted snapshot no longer stores `statuses` and instead stores
+- [x] The persisted snapshot no longer stores `statuses` and instead stores
       one canonical connector-level record set derived from `app/list` to
       rebuild publication and
       invocation routes.
-- [ ] `tools/list` publishes connector-level tools using only persisted
+- [x] `tools/list` publishes connector-level tools using only persisted
       connector records from the snapshot.
-- [ ] `tools/call` resolves routes using the app-list-derived snapshot metadata,
+- [x] `tools/call` resolves routes using the app-list-derived snapshot metadata,
       without relying on `McpServerStatus.tools` or remote tool names.
-- [ ] Published tool descriptions no longer include capability-count text from
+- [x] Published tool descriptions no longer include capability-count text from
       `status.tools`.
-- [ ] Duplicate canonical connector ids fail refresh instead of silently picking
-      one app.
-- [ ] Malformed or incomplete connector records fail publication instead of
+- [x] Duplicate opaque-app collisions are resolved deterministically with
+      stable suffixes derived from `app.id`, without depending on `app/list`
+      order.
+- [x] Malformed or incomplete connector records fail publication instead of
       degrading or being skipped silently.
-- [ ] Snapshot freshness and cache-key logic no longer depend on
+- [x] Snapshot freshness and cache-key logic no longer depend on
       `legacy app-status RPC` output.
-- [ ] The initialization/cache flow and README snapshot example both describe an
+- [x] The initialization/cache flow and README snapshot example both describe an
       app-list-only snapshot model.
 
 ---
@@ -307,31 +296,32 @@ to preserve runtime behavior.
 
 ### Phase 1: Redefine the snapshot contract
 
-- [ ] Add a new snapshot version that removes `statuses`.
-- [ ] Define persisted `connectors[]` metadata derived from `AppInfo`.
-- [ ] Encode canonical connector-id derivation and collision failure rules in
-      the snapshot builder.
-- [ ] Update snapshot read/write and cache-key logic to use the new shape.
+- [x] Add a new snapshot version that removes `statuses`.
+- [x] Define persisted `connectors[]` metadata derived from `AppInfo`.
+- [x] Encode canonical connector-id derivation and deterministic collision
+      handling in the snapshot builder.
+- [x] Update snapshot read/write and cache-key logic to use the new shape.
 
 ### Phase 2: Remove status collection from refresh
 
-- [ ] Delete `legacy status refresh helper()` from the refresh path.
-- [ ] Make `captureAppServerSnapshot()` read only paginated `app/list`.
-- [ ] Update refresh tests to assert app-list-only capture behavior.
+- [x] Delete `legacy status refresh helper()` from the refresh path.
+- [x] Make `captureAppServerSnapshot()` read only paginated `app/list`.
+- [x] Update refresh tests to assert app-list-only capture behavior.
 
 ### Phase 3: Rebuild publication from app-list-derived metadata
 
-- [ ] Replace `buildStatusByConnectorId()` and status completeness checks with
+- [x] Replace status regrouping and status completeness checks with
       snapshot `connectors[]` reads.
-- [ ] Remove capability-count description logic.
-- [ ] Remove stale route fields such as `availableToolNames` if there is no real
-      runtime consumer.
+- [x] Remove capability-count description logic.
+- [x] Remove stale pre-migration route fields that no longer have a runtime
+      consumer.
 
 ### Phase 4: Docs and proof updates
 
-- [ ] Update flow docs and README snapshot examples.
-- [ ] Re-run live connector proof to confirm Gmail, Calendar, and Linear still
-      publish and invoke correctly.
+- [x] Update flow docs and README snapshot examples.
+- [x] Re-run live connector proof to confirm Gmail and list-tools still
+      publish and invoke correctly, with the remaining live timeout isolated to
+      the Linear leg of the full harness.
 
 ### Phase Dependencies
 
@@ -358,7 +348,8 @@ Unit tests:
 - Add coverage for connector metadata derivation from `AppInfo`:
   connector id normalization, published tool name, invocation token, and
   description fallback.
-- Add coverage for duplicate canonical connector-id derivation failing refresh.
+- Add coverage for duplicate canonical connector-id derivation staying stable
+  across `app/list` order.
 - Add coverage for old snapshot version invalidation.
 - Add coverage for snapshot key changes after connector-level publication fields
   change, without any status dependency.
@@ -382,10 +373,11 @@ Manual validation:
 
 ## Done Criteria
 
-- [ ] Implementation matches the app-list-only snapshot model in this spec.
-- [ ] Validation results are recorded or linked, including live connector proof.
-- [ ] Flow docs, README, and spec docs are updated to remove status-based
-      publication language.
+- [x] Implementation matches the app-list-only snapshot model in this spec.
+- [x] Validation results are recorded or linked, including the current live
+      connector proof status.
+- [x] Flow docs, README, and spec docs are updated to remove status-based
+      publication language from the current-state documentation.
 
 ---
 
@@ -393,18 +385,18 @@ Manual validation:
 
 ### Open Items
 
-- [ ] Confirm whether any remaining runtime logic truly consumes
-      `availableToolNames`; delete it if not.
+- [ ] The remaining live Linear timeout in the full integration harness is still
+      unresolved and blocks the Google Calendar leg in `full` mode.
 
 ### Risks and Mitigations
 
-| Risk                                                                                      | Impact | Probability | Mitigation                                                                                                                                                    |
-| ----------------------------------------------------------------------------------------- | ------ | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AppInfo` lacks some field we implicitly depended on from status metadata                 | Med    | Low         | Encode the exact required fields in the new `connectors[]` snapshot contract and prove route rebuild plus publication from tests before removing status code. |
-| Snapshot migration leaves stale v1 files around and causes confusing publication failures | Med    | Med         | Bump snapshot version, invalidate old snapshots cleanly, and add tests that v1 snapshots are treated as stale.                                                |
-| Removing status-based capability text makes tool descriptions less informative            | Low    | Med         | Use `AppInfo.description` when present and a connector-level fallback otherwise; do not block the migration on capability counts.                             |
-| Two apps resolve to the same canonical connector id and silently collapse into one route  | High   | Med         | Make duplicate canonical ids a hard refresh failure and add explicit collision tests.                                                                         |
-| Hidden status-dependent code remains in tests or route types                              | Med    | Med         | Search for `McpServerStatus`, `status.tools`, and `availableToolNames`, then remove or justify each remaining use.                                            |
+| Risk                                                                                               | Impact | Probability | Mitigation                                                                                                                                                    |
+| -------------------------------------------------------------------------------------------------- | ------ | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AppInfo` lacks some field we implicitly depended on from status metadata                          | Med    | Low         | Encode the exact required fields in the new `connectors[]` snapshot contract and prove route rebuild plus publication from tests before removing status code. |
+| Snapshot migration leaves stale v1 files around and causes confusing publication failures          | Med    | Med         | Bump snapshot version, invalidate old snapshots cleanly, and add tests that v1 snapshots are treated as stale.                                                |
+| Removing status-based capability text makes tool descriptions less informative                     | Low    | Med         | Use `AppInfo.description` when present and a connector-level fallback otherwise; do not block the migration on capability counts.                             |
+| Two apps resolve to the same canonical connector id and published names depend on `app/list` order | High   | Med         | Assign connector ids deterministically within each collision group and cover the behavior with order-invariance tests.                                        |
+| Hidden status-dependent code remains in tests or route types                                       | Med    | Med         | Search for status-model remnants in runtime docs/specs and remove or explicitly mark them as historical context.                                              |
 
 ### Simplifications and Assumptions
 

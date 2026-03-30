@@ -136,23 +136,59 @@ export function deriveConnectorRecord(
 }
 
 export function deriveConnectorRecordsFromApps(apps: AppInfo[]): PersistedConnectorRecord[] {
-  const records: PersistedConnectorRecord[] = [];
+  const appsWithCanonicalId = apps.map((app, index) => ({
+    app,
+    index,
+    canonicalConnectorId: deriveCanonicalConnectorId(app),
+  }));
+  const entriesByCanonicalId = new Map<
+    string,
+    Array<{ app: AppInfo; index: number; canonicalConnectorId: string }>
+  >();
+
+  for (const entry of appsWithCanonicalId) {
+    const group = entriesByCanonicalId.get(entry.canonicalConnectorId);
+    if (group) {
+      group.push(entry);
+      continue;
+    }
+    entriesByCanonicalId.set(entry.canonicalConnectorId, [entry]);
+  }
+
+  const connectorIdByIndex = new Map<number, string>();
   const seenConnectorIds = new Set<string>();
 
-  for (const app of apps) {
-    const canonicalConnectorId = deriveCanonicalConnectorId(app);
-    let connectorId = canonicalConnectorId;
-    if (seenConnectorIds.has(connectorId)) {
-      connectorId = `${canonicalConnectorId}_${deriveConnectorCollisionSuffix(app)}`;
+  for (const [canonicalConnectorId, group] of entriesByCanonicalId) {
+    const collisionGroup = [...group].sort((left, right) => {
+      const appIdComparison = left.app.id.localeCompare(right.app.id);
+      if (appIdComparison !== 0) {
+        return appIdComparison;
+      }
+      return left.index - right.index;
+    });
+
+    for (const [position, entry] of collisionGroup.entries()) {
+      const connectorId =
+        position === 0
+          ? canonicalConnectorId
+          : `${canonicalConnectorId}_${deriveConnectorCollisionSuffix(entry.app)}`;
+      if (seenConnectorIds.has(connectorId)) {
+        throw new Error(
+          `Could not derive unique connector id from app/list for app: ${entry.app.id} (${connectorId})`,
+        );
+      }
+      seenConnectorIds.add(connectorId);
+      connectorIdByIndex.set(entry.index, connectorId);
     }
-    if (seenConnectorIds.has(connectorId)) {
-      throw new Error(
-        `Could not derive unique connector id from app/list for app: ${app.id} (${connectorId})`,
-      );
+  }
+
+  const records: PersistedConnectorRecord[] = [];
+  for (const entry of appsWithCanonicalId) {
+    const connectorId = connectorIdByIndex.get(entry.index);
+    if (!connectorId) {
+      throw new Error(`Missing derived connector id for app: ${entry.app.id}`);
     }
-    const record = deriveConnectorRecord(app, connectorId);
-    seenConnectorIds.add(record.connectorId);
-    records.push(record);
+    records.push(deriveConnectorRecord(entry.app, connectorId));
   }
 
   return records;

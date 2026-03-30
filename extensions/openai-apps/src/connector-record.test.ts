@@ -95,21 +95,38 @@ describe("connector-record", () => {
   });
 
   it("adds a stable suffix when two apps collapse to the same canonical connector id", () => {
-    expect(
-      deriveConnectorRecordsFromApps([
-        createApp({ id: "connector_37316be7febe4224b3d31465bae4dbd7", name: "Notion" }),
-        createApp({ id: "connector_1ee51bd730c272434e1b17c46f8a2397", name: "Notion" }),
-      ]),
-    ).toEqual([
-      expect.objectContaining({
+    const apps = [
+      createApp({ id: "connector_37316be7febe4224b3d31465bae4dbd7", name: "Notion" }),
+      createApp({ id: "connector_1ee51bd730c272434e1b17c46f8a2397", name: "Notion" }),
+    ];
+
+    const forward = deriveConnectorRecordsFromApps(apps).map((record) => ({
+      appId: record.appId,
+      connectorId: record.connectorId,
+      publishedName: record.publishedName,
+    }));
+    const reverse = deriveConnectorRecordsFromApps([...apps].reverse()).map((record) => ({
+      appId: record.appId,
+      connectorId: record.connectorId,
+      publishedName: record.publishedName,
+    }));
+
+    const sortByAppId = <T extends { appId: string }>(records: T[]) =>
+      [...records].sort((left, right) => left.appId.localeCompare(right.appId));
+
+    expect(sortByAppId(forward)).toEqual([
+      {
+        appId: "connector_1ee51bd730c272434e1b17c46f8a2397",
         connectorId: "notion",
         publishedName: "chatgpt_app_notion",
-      }),
-      expect.objectContaining({
-        connectorId: "notion_17c46f8a2397",
-        publishedName: "chatgpt_app_notion_17c46f8a2397",
-      }),
+      },
+      {
+        appId: "connector_37316be7febe4224b3d31465bae4dbd7",
+        connectorId: "notion_1465bae4dbd7",
+        publishedName: "chatgpt_app_notion_1465bae4dbd7",
+      },
     ]);
+    expect(sortByAppId(reverse)).toEqual(sortByAppId(forward));
   });
 
   it("hashes connector-level publication fields without any status dependency", () => {
