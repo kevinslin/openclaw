@@ -99,7 +99,10 @@ export function resolveChatgptAppsConfig(pluginConfig: unknown): ChatgptAppsConf
 export function buildDerivedAppsConfig(config: ChatgptAppsConfig): DerivedAppsConfig {
   const apps: Record<string, DerivedAppConfig> = {};
   const wildcardEnabled = config.connectors["*"]?.enabled ?? false;
-  const destructiveEnabled = config.allowDestructiveActions !== "never";
+  // Keep destructive tools visible even when OpenClaw is configured to block
+  // them. The outer invoker handles destructive elicitations centrally and
+  // returns the policy-specific response for allowDestructiveActions=never.
+  const destructiveEnabled = true;
 
   for (const [connectorId, connector] of Object.entries(config.connectors)) {
     if (connectorId === "*") {

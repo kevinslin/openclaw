@@ -106,7 +106,7 @@ describe("buildDerivedAppsConfig", () => {
     expect(hashChatgptAppsConfig(first)).toBe(hashChatgptAppsConfig(second));
   });
 
-  it("disables destructive actions in the sidecar config when configured to never allow them", () => {
+  it("keeps destructive tools enabled in the sidecar config when configured to never allow them", () => {
     const derived = buildDerivedAppsConfig({
       enabled: true,
       allowDestructiveActions: "never",
@@ -120,12 +120,12 @@ describe("buildDerivedAppsConfig", () => {
     expect(derived).toEqual({
       _default: {
         enabled: true,
-        destructive_enabled: false,
+        destructive_enabled: true,
         open_world_enabled: true,
       },
       gmail: {
         enabled: true,
-        destructive_enabled: false,
+        destructive_enabled: true,
         open_world_enabled: true,
       },
     });

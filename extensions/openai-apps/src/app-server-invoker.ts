@@ -404,6 +404,29 @@ function buildDeclinedMcpServerElicitationResponse(): McpServerElicitationReques
   };
 }
 
+function resolveElicitationConnectorName(
+  request: McpServerElicitationRequestParams,
+): string | null {
+  const meta = request._meta;
+  if (
+    typeof meta === "object" &&
+    meta !== null &&
+    typeof (meta as { connector_name?: unknown }).connector_name === "string"
+  ) {
+    return ((meta as { connector_name: string }).connector_name || "").trim() || null;
+  }
+
+  return request.serverName.trim() || null;
+}
+
+function buildAutoDeclinedDestructiveActionMessage(
+  request: McpServerElicitationRequestParams,
+): string {
+  const connectorName = resolveElicitationConnectorName(request);
+  const suffix = connectorName ? ` for ${connectorName}` : "";
+  return `OpenClaw is configured with allowDestructiveActions=never, so I can't perform write actions${suffix}.`;
+}
+
 async function resolveMcpServerElicitationResponse(params: {
   mode: AllowDestructiveActionsMode;
   request: McpServerElicitationRequestParams;
@@ -551,6 +574,7 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
     );
 
     let serverRequestError: Error | null = null;
+    let autoDeclinedDestructiveAction: McpServerElicitationRequestParams | null = null;
     const handledServerRequests = new Set<string>([
       "item/tool/requestUserInput",
       "item/permissions/requestApproval",
@@ -599,6 +623,9 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
           request: context.request.params,
           handleMcpServerElicitation: params.handleMcpServerElicitation,
         });
+        if (params.config.allowDestructiveActions === "never" && response.action === "decline") {
+          autoDeclinedDestructiveAction ??= context.request.params;
+        }
         writeDebugLog(
           env,
           `app-server elicitation resolved action=${response.action}`,
@@ -694,6 +721,18 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
       const message =
         run.completed.turn.error?.message ?? `Turn ended with status ${run.completed.turn.status}`;
       throw new Error(message);
+    }
+
+    if (autoDeclinedDestructiveAction) {
+      const text = buildAutoDeclinedDestructiveActionMessage(autoDeclinedDestructiveAction);
+      writeDebugLog(
+        env,
+        "app-server invocation auto-declined destructive action",
+        params.statePaths.rootDir,
+      );
+      return {
+        content: [{ type: "text", text }],
+      };
     }
 
     const thread = await client.readThread({

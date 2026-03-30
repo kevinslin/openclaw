@@ -1,16 +1,9 @@
 #!/usr/bin/env -S node --import tsx
 
 import { spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
-import {
-  copyFile,
-  mkdir,
-  readFile,
-  readdir,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -18,14 +11,13 @@ import process from "node:process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { execFile } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { shouldExcludeConnectorId } from "../src/connector-record.js";
 import { resolveChatgptAppsConfig } from "../src/config.js";
+import { shouldExcludeConnectorId } from "../src/connector-record.js";
 import { resolveChatgptAppsStatePaths } from "../src/state-paths.js";
 
-type Mode = "simple" | "full";
+type Mode = "simple" | "full" | "write";
 
 type ConnectorConfigEntry = {
   enabled?: boolean;
@@ -78,10 +70,12 @@ const LINEAR_LOG = path.join(ROOT_DIR, "linear-tui.log");
 const LINEAR_SUMMARY = path.join(ROOT_DIR, "linear-summary.txt");
 const GCAL_LOG = path.join(ROOT_DIR, "gcal-tui.log");
 const GCAL_SUMMARY = path.join(ROOT_DIR, "gcal-summary.txt");
+const WRITE_ALWAYS_SUMMARY = path.join(ROOT_DIR, "write-always-summary.json");
+const WRITE_NEVER_SUMMARY = path.join(ROOT_DIR, "write-never-summary.json");
 const GATEWAY_LOG = path.join(ROOT_DIR, "gateway.log");
 
 function usage(): string {
-  return `Usage: extensions/openai-apps/integ/test-chatapps-integ.ts [simple|full]
+  return `Usage: extensions/openai-apps/integ/test-chatapps-integ.ts [simple|full|write]
 
 Runs the live ChatGPT apps connector integration suite against the dev gateway,
 writes artifacts to /tmp/claw-chat-apps/, generates a Showboat proof doc, and
@@ -89,7 +83,8 @@ returns 0 on success or 1 on failure.
 
 Modes:
   simple  Verify list tools and Gmail
-  full    Verify list tools, Gmail, Linear, and Google Calendar`;
+  full    Verify list tools, Gmail, Linear, and Google Calendar
+  write   Verify Google Calendar write behavior for allowDestructiveActions`;
 }
 
 function fail(message: string): never {
@@ -106,7 +101,7 @@ function parseMode(argv: string[]): Mode {
   if (arg === undefined) {
     return "full";
   }
-  if (arg === "simple" || arg === "full") {
+  if (arg === "simple" || arg === "full" || arg === "write") {
     return arg;
   }
   console.error(usage());
@@ -136,6 +131,12 @@ function buildIntegrationEnv(): NodeJS.ProcessEnv {
     OPENCLAW_AGENT_DIR: INTEG_AGENT_DIR,
     OPENCLAW_GATEWAY_PORT: String(GATEWAY_PORT),
   };
+}
+
+function toStrictEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -195,9 +196,7 @@ function normalizeConnectorKey(value: string): string {
     .replace(/_+/g, "_");
 }
 
-function buildConnectorConfigState(
-  configuredConnectors: Record<string, ConnectorConfigEntry>,
-): {
+function buildConnectorConfigState(configuredConnectors: Record<string, ConnectorConfigEntry>): {
   wildcardEnabled: boolean;
   enabledConnectorIds: Set<string>;
   disabledConnectorIds: Set<string>;
@@ -251,7 +250,11 @@ function buildExpectedPublishedTools(
     ) {
       continue;
     }
-    if (!hasExplicitConnectors || wildcardEnabled || enabledConnectorIds.has(connector.connectorId)) {
+    if (
+      !hasExplicitConnectors ||
+      wildcardEnabled ||
+      enabledConnectorIds.has(connector.connectorId)
+    ) {
       expected.push(connector.publishedName);
     }
   }
@@ -539,7 +542,12 @@ function hasReusableOpenaiCodexAuth(raw: unknown): boolean {
     }
     const access = credential.access;
     const accountId = credential.accountId;
-    if (typeof access === "string" && access.trim() && typeof accountId === "string" && accountId.trim()) {
+    if (
+      typeof access === "string" &&
+      access.trim() &&
+      typeof accountId === "string" &&
+      accountId.trim()
+    ) {
       return true;
     }
   }
@@ -802,7 +810,10 @@ async function startFreshGateway(context: RunContext, integEnv: NodeJS.ProcessEn
   });
 }
 
-async function captureListToolsSummary(requiredPublishedTools: string[], integEnv: NodeJS.ProcessEnv): Promise<void> {
+async function captureListToolsSummary(
+  requiredPublishedTools: string[],
+  integEnv: NodeJS.ProcessEnv,
+): Promise<void> {
   const rawConfig = await loadRawConfig(integEnv);
   const resolvedConfig = resolveChatgptAppsConfig(getOpenaiAppsRawConfig(rawConfig));
 
@@ -810,7 +821,7 @@ async function captureListToolsSummary(requiredPublishedTools: string[], integEn
     command: "node",
     args: ["--import", "tsx", "./extensions/openai-apps/src/server.ts"],
     cwd: REPO_DIR,
-    env: integEnv,
+    env: toStrictEnv(integEnv),
   });
 
   const client = new Client({ name: "chatapps-integ", version: "0.2.0" });
@@ -833,7 +844,10 @@ async function captureListToolsSummary(requiredPublishedTools: string[], integEn
     string,
     ConnectorConfigEntry
   >;
-  const expectedPublishedTools = buildExpectedPublishedTools(snapshotConnectors, configuredConnectors);
+  const expectedPublishedTools = buildExpectedPublishedTools(
+    snapshotConnectors,
+    configuredConnectors,
+  );
 
   if (actualPublishedTools.length === 0) {
     fail("Published tool inventory was empty");
@@ -846,7 +860,9 @@ async function captureListToolsSummary(requiredPublishedTools: string[], integEn
     fail("published tool inventory did not match snapshot expectations");
   }
 
-  const missingRequired = requiredPublishedTools.filter((toolName) => !actualPublishedTools.includes(toolName));
+  const missingRequired = requiredPublishedTools.filter(
+    (toolName) => !actualPublishedTools.includes(toolName),
+  );
   if (missingRequired.length > 0) {
     console.error("Missing required published tools");
     console.error(JSON.stringify(missingRequired, null, 2));
@@ -903,6 +919,36 @@ async function transcriptSummaryComplete(outputPath: string): Promise<boolean> {
 async function transcriptSummaryHasError(outputPath: string): Promise<boolean> {
   const text = await readFile(outputPath, "utf8");
   return text.includes("isError=True") || text.includes('"status": "error"');
+}
+
+async function runWriteActionCase(
+  caseName: "write-always" | "write-never",
+  outputPath: string,
+  integEnv: NodeJS.ProcessEnv,
+): Promise<void> {
+  const stdout = await execCommand({
+    command: "node",
+    args: [
+      "--import",
+      "tsx",
+      "./extensions/openai-apps/integ/verify-destructive-action-case.ts",
+      caseName,
+    ],
+    cwd: REPO_DIR,
+    env: {
+      ...integEnv,
+      OPENCLAW_SHOWBOAT_SOURCE_ROOT: INTEG_STATE_DIR,
+      OPENCLAW_SHOWBOAT_SOURCE_CONFIG_PATH: INTEG_CONFIG_PATH,
+      OPENCLAW_SHOWBOAT_SOURCE_AGENT_DIR: INTEG_MAIN_AGENT_DIR,
+      OPENCLAW_SHOWBOAT_SOURCE_SNAPSHOT_PATH: path.join(
+        INTEG_STATE_DIR,
+        "plugin-runtimes",
+        "openai-apps",
+        "connectors.snapshot.json",
+      ),
+    },
+  });
+  await writeFile(outputPath, stdout, "utf8");
 }
 
 async function runTuiCheckOnce(params: {
@@ -983,7 +1029,9 @@ async function runTuiCheck(params: {
     const attemptLogPath =
       attempt === 1 ? params.logPath : params.logPath.replace(/\.log$/, `${attemptSuffix}.log`);
     const attemptOutputPath =
-      attempt === 1 ? params.outputPath : params.outputPath.replace(/\.txt$/, `${attemptSuffix}.txt`);
+      attempt === 1
+        ? params.outputPath
+        : params.outputPath.replace(/\.txt$/, `${attemptSuffix}.txt`);
     const status = await runTuiCheckOnce({
       ...params,
       session: attemptSession,
@@ -1044,8 +1092,14 @@ function buildGoogleCalendarPrompt(): string {
 
 async function generateShowboatDemo(mode: Mode): Promise<string> {
   const demoFile = path.join(ROOT_DIR, `demo-${mode}.md`);
-  const title =
-    mode === "simple" ? "ChatGPT Apps Connector Demo (Simple)" : "ChatGPT Apps Connector Demo (Full)";
+  let title = "ChatGPT Apps Connector Demo";
+  if (mode === "simple") {
+    title = "ChatGPT Apps Connector Demo (Simple)";
+  } else if (mode === "full") {
+    title = "ChatGPT Apps Connector Demo (Full)";
+  } else if (mode === "write") {
+    title = "ChatGPT Apps Connector Demo (Write)";
+  }
 
   await rm(demoFile, { force: true });
 
@@ -1065,7 +1119,12 @@ async function generateShowboatDemo(mode: Mode): Promise<string> {
     `Generated by \`extensions/openai-apps/integ/test-chatapps-integ.ts ${mode}\`. This proof doc summarizes the published app snapshot plus transcript evidence from the latest live run under \`${ROOT_DIR}\`.`,
   );
   await runShowboat("exec", demoFile, "bash", `cat ${LIST_TOOLS_SUMMARY_JSON}`);
-  await runShowboat("exec", demoFile, "bash", `cat ${GMAIL_SUMMARY}`);
+  if (mode === "write") {
+    await runShowboat("exec", demoFile, "bash", `cat ${WRITE_ALWAYS_SUMMARY}`);
+    await runShowboat("exec", demoFile, "bash", `cat ${WRITE_NEVER_SUMMARY}`);
+  } else {
+    await runShowboat("exec", demoFile, "bash", `cat ${GMAIL_SUMMARY}`);
+  }
   if (mode === "full") {
     await runShowboat("exec", demoFile, "bash", `cat ${LINEAR_SUMMARY}`);
     await runShowboat("exec", demoFile, "bash", `cat ${GCAL_SUMMARY}`);
@@ -1084,7 +1143,9 @@ async function main(): Promise<void> {
   const requiredPublishedTools =
     mode === "full"
       ? ["chatgpt_app_gmail", "chatgpt_app_linear", "chatgpt_app_google_calendar"]
-      : ["chatgpt_app_gmail"];
+      : mode === "write"
+        ? ["chatgpt_app_google_calendar"]
+        : ["chatgpt_app_gmail"];
 
   const integEnv = buildIntegrationEnv();
   const context: RunContext = {
@@ -1099,8 +1160,20 @@ async function main(): Promise<void> {
     await prepareOutputDir();
     await requirePrereqs();
     await prepareIntegrationProfile(integEnv);
-    await startFreshGateway(context, integEnv);
     await captureListToolsSummary(requiredPublishedTools, integEnv);
+
+    if (mode === "write") {
+      await runWriteActionCase("write-always", WRITE_ALWAYS_SUMMARY, integEnv);
+      await runWriteActionCase("write-never", WRITE_NEVER_SUMMARY, integEnv);
+
+      const demoFile = await generateShowboatDemo(mode);
+
+      console.log(`demo_file=${demoFile}`);
+      console.log(`artifacts_dir=${ROOT_DIR}`);
+      return;
+    }
+
+    await startFreshGateway(context, integEnv);
 
     await runTuiCheck({
       session: gmailSession,

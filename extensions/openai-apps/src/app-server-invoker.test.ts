@@ -626,7 +626,18 @@ describe("invokeViaAppServer", () => {
 
   it("declines destructive app elicitations when configured to never allow them", async () => {
     let elicitationHandler: ((context: unknown) => Promise<unknown> | unknown) | undefined;
+    const readThread = vi.fn<AppServerInvocationClient["readThread"]>(async () =>
+      createThreadReadResponse([
+        {
+          type: "agentMessage",
+          id: "msg_1",
+          phase: "final_answer",
+          text: "Google Calendar does not support write actions.",
+        },
+      ]),
+    );
     const client = createMockClient({
+      readThread,
       handleServerRequest: (method, handler) => {
         if (method === "mcpServer/elicitation/request") {
           elicitationHandler = handler as (context: unknown) => Promise<unknown> | unknown;
@@ -707,8 +718,14 @@ describe("invokeViaAppServer", () => {
         clientFactory: async () => client,
       }),
     ).resolves.toEqual({
-      content: [{ type: "text", text: "ok" }],
+      content: [
+        {
+          type: "text",
+          text: "OpenClaw is configured with allowDestructiveActions=never, so I can't perform write actions for Google Calendar.",
+        },
+      ],
     });
+    expect(readThread).not.toHaveBeenCalled();
   });
 
   it("delegates destructive app elicitations to the provided handler when configured for on-request", async () => {

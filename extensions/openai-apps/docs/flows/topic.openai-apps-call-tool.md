@@ -177,11 +177,13 @@ Ordered call path:
      permissions: { ...requested network/fileSystem permissions... },
      scope: "turn",
    }))
-   client.handleServerRequest("mcpServer/elicitation/request", async () => ({
-     action: "decline",
-     content: null,
-     _meta: null,
-   }))
+   client.handleServerRequest("mcpServer/elicitation/request", async context =>
+     resolveMcpServerElicitationResponse({
+       mode: params.config.allowDestructiveActions,
+       request: context.request.params,
+       handleMcpServerElicitation: params.handleMcpServerElicitation,
+     })
+   )
    registerFailureHandler("item/commandExecution/requestApproval", () =>
      buildApprovalError("App invocation requested command approval")
    )
@@ -252,7 +254,7 @@ Branch points:
 
 - `item/tool/requestUserInput` is auto-answered instead of failing.
 - `item/permissions/requestApproval` is mirrored back with requested permissions and `scope: "turn"`.
-- `mcpServer/elicitation/request` is always declined.
+- `mcpServer/elicitation/request` is routed by `allow_destructive_actions`: auto-accepted for `"always"`, relayed outward for `"on-request"`, and declined for `"never"`.
 - Command/file-change approvals and any unsupported server request are converted into stored `serverRequestError`.
 - Empty `args.request` fails before `startThread(...)`.
 

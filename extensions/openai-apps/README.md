@@ -188,12 +188,14 @@ Run the integration suite through the extension harness:
 ```bash
 ./extensions/openai-apps/integ/test-chatapps-integ.sh simple
 ./extensions/openai-apps/integ/test-chatapps-integ.sh full
+./extensions/openai-apps/integ/test-chatapps-integ.sh write
 ```
 
 Mode coverage:
 
 - `simple`: runs `list tools` plus the Gmail call.
 - `full`: runs `list tools`, Gmail, Linear, and Google Calendar.
+- `write`: runs `list tools` plus Google Calendar write-policy checks for `allowDestructiveActions=always` and `allowDestructiveActions=never`.
 
 The harness writes artifacts under `/tmp/claw-chat-apps/`.
 

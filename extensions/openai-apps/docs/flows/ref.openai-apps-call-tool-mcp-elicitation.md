@@ -4,7 +4,7 @@ Last updated: 2026-03-30
 
 ## Purpose
 
-This flow documents what happens when the app-server tries to raise an MCP elicitation during the `callTool` invocation path. It answers why the invocation thread advertises `mcp_elicitations: true`, where `mcpServer/elicitation/request` is handled, and how that request affects the eventual turn result.
+This flow documents what happens when the app-server tries to raise an MCP elicitation during the `callTool` invocation path. It answers why the invocation thread advertises `mcp_elicitations: true`, where `mcpServer/elicitation/request` is handled, how `allow_destructive_actions` changes the response path, and how that request affects the eventual turn result.
 
 ## Entry points
 
@@ -86,7 +86,7 @@ State transitions / outputs:
 
 Branch points:
 
-- None in this phase; elicitation capability is always enabled by the fixed approval-policy constant.
+- None in this phase; elicitation capability is always enabled by the fixed approval-policy constant. The destructive-action mode is resolved later from `allow_destructive_actions`, which defaults to `never` and supports `always`, `on-request`, and `never`.
 
 External boundaries:
 
@@ -117,15 +117,15 @@ Ordered call path:
      "account/chatgptAuthTokens/refresh",
    ])
    ```
-2. Register a dedicated handler that always declines the elicitation and returns no content or metadata.
+2. Register a dedicated handler that maps `mcpServer/elicitation/request` through `allow_destructive_actions`.
    ```ts
-   // Source: extensions/openai-apps/src/app-server-invoker.ts#L532-L539
-   client.handleServerRequest("mcpServer/elicitation/request", async () => {
-     return {
-       action: "decline",
-       content: null,
-       _meta: null,
-     };
+   // Source: extensions/openai-apps/src/app-server-invoker.ts
+   client.handleServerRequest("mcpServer/elicitation/request", async (context) => {
+     return await resolveMcpServerElicitationResponse({
+       mode: params.config.allowDestructiveActions,
+       request: context.request.params,
+       handleMcpServerElicitation: params.handleMcpServerElicitation,
+     });
    });
    ```
 3. Keep the generic `onServerRequest(...)` observer from treating elicitation as unsupported.
@@ -149,13 +149,14 @@ State transitions / outputs:
 Branch points:
 
 - `mcpServer/elicitation/request` never sets `serverRequestError`; it is always considered handled.
+- App-action elicitations are accepted for `"always"`, declined for `"never"`, or delegated outward for `"on-request"`.
 - Unsupported methods outside the allowlist still become hard invocation errors.
 
 External boundaries:
 
 - App-server server-request callbacks
 
-### Phase 3: Decline the elicitation and let the turn continue or fail on its own
+### Phase 3: Resolve the elicitation and let the turn continue or fail on its own
 
 Trigger / entry condition:
 
@@ -167,17 +168,51 @@ Entrypoints:
 
 Ordered call path:
 
-1. Return a fixed decline response instead of synthesizing user-visible input.
+1. Resolve the app-server request according to `allow_destructive_actions`.
+
    ```ts
-   // Source: extensions/openai-apps/src/app-server-invoker.ts#L532-L539
-   response := {
-     action: "decline",
-     content: null,
-     _meta: null,
-   }
-   return response
+   // Source: extensions/openai-apps/src/app-server-invoker.ts
+   if allow_destructive_actions === "always"
+     return { action: "accept", content: {}, _meta: null }
+   if allow_destructive_actions === "never"
+     return { action: "decline", content: null, _meta: null }
+   return await handleMcpServerElicitation(request)
    ```
-2. Resume normal turn completion handling after the request cycle finishes.
+
+   - `always` auto-accepts the destructive action inside the invoker.
+   - `never` auto-declines the destructive action inside the invoker.
+   - `on-request` forwards the request to the outer MCP elicitation handler.
+
+2. Surface the outer elicitation prompt with the app payload, then return accept or decline from the outer client.
+
+   ```ts
+   // Source: extensions/openai-apps/src/mcp-bridge.ts
+   function buildDestructiveActionApprovalPrompt(...) {
+     return {
+       message: [
+         `The ${connectorName} app requested approval for ${toolTitle}.`,
+         ...,
+         "App payload:",
+         payload,
+         "Choose accept to continue or decline to reject the action.",
+       ].join("\n\n"),
+       requestedSchema: {
+         type: "object",
+         properties: {},
+       },
+     };
+   }
+
+   async handleMcpServerElicitation(...) {
+     const result = await this.server.elicitInput(buildDestructiveActionApprovalPrompt(elicitation));
+     if (result.action !== "accept") {
+       return { action: "decline", content: null, _meta: null };
+     }
+     return { action: "accept", content: {}, _meta: null };
+   }
+   ```
+
+3. Resume normal turn completion handling after the request cycle finishes.
    ```ts
    // Source: extensions/openai-apps/src/app-server-invoker.ts#L609-L628
    if serverRequestError
@@ -188,7 +223,7 @@ Ordered call path:
        throw unsupportedServerRequestError
      throw Error(run.completed.turn.error?.message ?? `Turn ended with status ${run.completed.turn.status}`)
    ```
-3. Only extract final text when the declined elicitation did not cause the turn to fail.
+4. Only extract final text when the resolved elicitation did not cause the turn to fail.
    ```ts
    // Source: extensions/openai-apps/src/app-server-invoker.ts#L630-L649
    thread := await client.readThread({ threadId, includeTurns: true })
@@ -201,12 +236,13 @@ Ordered call path:
 State transitions / outputs:
 
 - Input: a live turn plus a server-raised elicitation request
-- Output: either a completed invocation with final text, or a normal turn failure after the elicitation was declined
+- Output: either a completed invocation with final text, or a normal turn failure after the elicitation was accepted or declined
 
 Branch points:
 
-- Declining the elicitation does not itself fail the invocation; the decisive branch is still `run.completed.turn.status`.
-- If the app-server reacts to the decline by failing the turn, that failure is surfaced through the standard post-turn error path.
+- Accepting or declining the elicitation does not itself fail the invocation; the decisive branch is still `run.completed.turn.status`.
+- If the app-server reacts to the chosen response by failing the turn, that failure is surfaced through the standard post-turn error path.
+- If the outer client does not support form elicitation, the request fails before the app-server receives an accept or decline.
 
 External boundaries:
 
