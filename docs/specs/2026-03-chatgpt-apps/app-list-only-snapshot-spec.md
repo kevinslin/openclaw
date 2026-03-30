@@ -1,7 +1,7 @@
 # Feature Spec: OpenAI Apps App-List-Only Snapshot And Publication
 
 **Date:** 2026-03-29
-**Status:** Planning
+**Status:** Implemented
 
 ---
 
