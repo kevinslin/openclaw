@@ -27,11 +27,11 @@ function buildSearchDirs(params: { env?: NodeJS.ProcessEnv; homeDir: string }): 
     .filter(Boolean);
 
   return unique([
-    ...pathDirs,
     path.join(params.homeDir, ".openai", "bin"),
     path.join(params.homeDir, "Library", "Application Support", "OpenAI", "bin"),
     path.join(params.homeDir, "Applications", "Codex.app", "Contents", "Resources"),
     path.join("/Applications", "Codex.app", "Contents", "Resources"),
+    ...pathDirs,
   ]);
 }
 

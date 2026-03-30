@@ -1,3 +1,6 @@
+import { appendFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
@@ -13,6 +16,22 @@ const REMOTE_CLIENT_INFO = {
   name: "openclaw-chatgpt-apps-bridge",
   version: "0.1.0",
 } as const;
+
+function writeRemoteDebug(message: string): void {
+  try {
+    appendFileSync(
+      path.join(
+        process.env.OPENCLAW_STATE_DIR?.trim() || path.join(os.homedir(), ".openclaw"),
+        "plugin-runtimes",
+        "openai-apps",
+        "remote-debug.log",
+      ),
+      `[openai-apps-remote] ${new Date().toISOString()} ${message}\n`,
+    );
+  } catch {
+    // Best effort only.
+  }
+}
 
 const RawListToolsResultSchema = z
   .object({
@@ -51,6 +70,7 @@ export function deriveChatgptAppsMcpUrl(): string {
 }
 
 export const createRemoteCodexAppsClient: RemoteCodexAppsClientFactory = async (params) => {
+  writeRemoteDebug("createRemoteCodexAppsClient");
   const transport = new StreamableHTTPClientTransport(new URL(deriveChatgptAppsMcpUrl()), {
     fetch: params.fetch,
     requestInit: {
@@ -65,6 +85,7 @@ export const createRemoteCodexAppsClient: RemoteCodexAppsClientFactory = async (
 
   return {
     listTools: async (listParams = {}) => {
+      writeRemoteDebug(`listTools cursor=${listParams.cursor ?? ""}`);
       const result = await client.request(
         {
           method: "tools/list",
@@ -77,15 +98,17 @@ export const createRemoteCodexAppsClient: RemoteCodexAppsClientFactory = async (
         nextCursor: result.nextCursor ?? undefined,
       };
     },
-    callTool: async (callParams) =>
-      (await client.callTool(
+    callTool: async (callParams) => {
+      writeRemoteDebug(`callTool name=${callParams.name}`);
+      return (await client.callTool(
         {
           name: callParams.name,
           arguments: callParams.arguments,
           _meta: callParams._meta,
         },
         CallToolResultSchema,
-      )) as CallToolResult,
+      )) as CallToolResult;
+    },
     close: async () => {
       await client.close();
     },

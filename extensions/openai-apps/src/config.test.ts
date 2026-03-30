@@ -9,6 +9,7 @@ describe("resolveChatgptAppsConfig", () => {
   it("applies defaults when openai-apps config is absent", () => {
     expect(resolveChatgptAppsConfig({})).toEqual({
       enabled: false,
+      appInvokePath: "appServer",
       appServer: {
         command: "codex",
         args: [],
@@ -25,6 +26,7 @@ describe("resolveChatgptAppsConfig", () => {
   it("normalizes app-server args and connector flags", () => {
     const config = resolveChatgptAppsConfig({
       enabled: true,
+      appInvokePath: "remoteMCP",
       appServer: {
         command: "codex-dev",
         args: ["app-server", "--analytics-default-enabled", "--foo"],
@@ -38,6 +40,7 @@ describe("resolveChatgptAppsConfig", () => {
     });
 
     expect(config.enabled).toBe(true);
+    expect(config.appInvokePath).toBe("remoteMCP");
     expect(config.appServer).toEqual({
       command: "codex-dev",
       args: ["--foo"],
@@ -53,6 +56,7 @@ describe("buildDerivedAppsConfig", () => {
   it("mirrors wildcard and connector enablement into the sidecar config", () => {
     const derived = buildDerivedAppsConfig({
       enabled: true,
+      appInvokePath: "appServer",
       appServer: { command: "codex", args: [] },
       linking: {
         enabled: false,
@@ -82,6 +86,7 @@ describe("buildDerivedAppsConfig", () => {
   it("omits optional null-valued fields from sidecar config entries", () => {
     const derived = buildDerivedAppsConfig({
       enabled: true,
+      appInvokePath: "appServer",
       appServer: { command: "codex", args: [] },
       linking: {
         enabled: false,
@@ -114,5 +119,13 @@ describe("buildDerivedAppsConfig", () => {
     });
 
     expect(hashChatgptAppsConfig(first)).toBe(hashChatgptAppsConfig(second));
+  });
+
+  it("falls back to appServer when appInvokePath is invalid", () => {
+    const config = resolveChatgptAppsConfig({
+      appInvokePath: "bogus",
+    });
+
+    expect(config.appInvokePath).toBe("appServer");
   });
 });

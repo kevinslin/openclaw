@@ -9,6 +9,11 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { protocol } from "codex-app-server-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import {
+  invokeViaAppServer,
+  type AppServerInvocationRoute,
+  type AppServerToolInvoker,
+} from "./app-server-invoker.js";
 import { resolveChatgptAppsProjectedAuth } from "./auth-projector.js";
 import { hashChatgptAppsConfig, hashChatgptBaseUrl, resolveChatgptAppsConfig } from "./config.js";
 import { ensureFreshSnapshot, type EnsureFreshSnapshotResult } from "./refresh-snapshot.js";
@@ -34,8 +39,12 @@ const INITIAL_WILDCARD_REFRESH_TIMEOUT_MS = 20_000;
 
 type BridgeRoute = {
   connectorId: string;
+  publishedName: string;
   remoteName: string;
   remoteMeta?: Record<string, unknown>;
+  appId?: string;
+  appName?: string;
+  appInvocationToken?: string;
 };
 
 type BridgeToolCache = {
@@ -376,6 +385,58 @@ function deriveConnectorKeysFromApp(app: AppInfo): string[] {
   return [...candidates];
 }
 
+function normalizeAppInvocationToken(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-+/g, "-");
+}
+
+function deriveAppInvocationToken(app: AppInfo, connectorId: string): string {
+  if (!looksLikeOpaqueAppId(app.id)) {
+    const normalizedId = normalizeAppInvocationToken(app.id);
+    if (normalizedId) {
+      return normalizedId;
+    }
+  }
+
+  for (const candidate of [app.name, ...app.pluginDisplayNames, connectorId]) {
+    const normalized = normalizeAppInvocationToken(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return normalizeAppInvocationToken(connectorId) || "app";
+}
+
+function buildAppInvocationRouteByConnectorId(
+  inventory: AppInfo[],
+): Map<string, AppServerInvocationRoute> {
+  const routes = new Map<string, AppServerInvocationRoute>();
+
+  for (const app of inventory) {
+    for (const connectorId of deriveConnectorKeysFromApp(app)) {
+      if (shouldExcludeConnectorId(connectorId) || routes.has(connectorId)) {
+        continue;
+      }
+
+      routes.set(connectorId, {
+        connectorId,
+        publishedName: "",
+        remoteName: "",
+        appId: app.id,
+        appName: app.name || app.pluginDisplayNames[0] || connectorId,
+        appInvocationToken: deriveAppInvocationToken(app, connectorId),
+      });
+    }
+  }
+
+  return routes;
+}
+
 function resolveConnectorIdForRemoteToolName(
   remoteToolName: string,
   allowedConnectorIds: Set<string>,
@@ -567,7 +628,7 @@ function withRoutingMetadata(tool: RemoteTool, route: BridgeRoute): Tool {
   };
   return {
     ...toolWithoutOutputSchema,
-    name: rewriteToolName(route.connectorId, route.remoteName),
+    name: route.publishedName,
     inputSchema: sanitizeToolSchema(tool.inputSchema),
     annotations: sanitizeToolAnnotations(tool.annotations),
     icons: sanitizeToolIcons(tool.icons),
@@ -604,6 +665,7 @@ export class ChatgptAppsMcpBridge {
   private readonly ensureFreshSnapshot;
   private readonly resolveProjectedAuth;
   private readonly remoteClientFactory: RemoteCodexAppsClientFactory;
+  private readonly appServerInvoker: AppServerToolInvoker;
   private hardRefreshRequested: boolean;
   private remoteClientState: {
     authKey: string;
@@ -622,6 +684,7 @@ export class ChatgptAppsMcpBridge {
     ensureFreshSnapshot?: typeof ensureFreshSnapshot;
     resolveProjectedAuth?: typeof resolveChatgptAppsProjectedAuth;
     remoteClientFactory?: RemoteCodexAppsClientFactory;
+    appServerInvoker?: AppServerToolInvoker;
   }) {
     this.loadOpenClawConfig = params.loadOpenClawConfig;
     this.env = params.env ?? process.env;
@@ -630,6 +693,7 @@ export class ChatgptAppsMcpBridge {
     this.ensureFreshSnapshot = params.ensureFreshSnapshot ?? ensureFreshSnapshot;
     this.resolveProjectedAuth = params.resolveProjectedAuth ?? resolveChatgptAppsProjectedAuth;
     this.remoteClientFactory = params.remoteClientFactory ?? createRemoteCodexAppsClient;
+    this.appServerInvoker = params.appServerInvoker ?? invokeViaAppServer;
 
     this.server = new Server(
       {
@@ -691,7 +755,7 @@ export class ChatgptAppsMcpBridge {
     args: Record<string, unknown> | undefined,
     meta?: Record<string, unknown>,
   ): Promise<CallToolResult> {
-    const publicationState = await this.getPublicationState();
+    let publicationState = await this.getPublicationState();
     this.scheduleBackgroundRefresh();
     let cache = await this.getToolCache(publicationState);
     let route = cache.routes.get(name);
@@ -705,6 +769,39 @@ export class ChatgptAppsMcpBridge {
     }
     if (!route) {
       throw new Error(`Unknown ChatGPT app tool: ${name}`);
+    }
+
+    if (publicationState.config.appInvokePath === "appServer") {
+      if (!route.appId || !route.appName || !route.appInvocationToken) {
+        publicationState = await this.getSnapshotPublicationState();
+        this.invalidateToolCache();
+        cache = await this.getToolCache(publicationState);
+        route = cache.routes.get(name);
+      }
+      if (!route?.appId || !route.appName || !route.appInvocationToken) {
+        throw new Error(`Missing app identity for ChatGPT app tool: ${name}`);
+      }
+
+      return await this.appServerInvoker({
+        config: publicationState.config,
+        route: {
+          connectorId: route.connectorId,
+          publishedName: route.publishedName,
+          remoteName: route.remoteName,
+          appId: route.appId,
+          appName: route.appName,
+          appInvocationToken: route.appInvocationToken,
+        },
+        args,
+        statePaths: resolveChatgptAppsStatePaths(this.env),
+        workspaceDir: this.workspaceDir,
+        env: this.env,
+        resolveProjectedAuth: async () =>
+          await this.resolveProjectedAuth({
+            config: this.loadOpenClawConfig(),
+            agentDir: this.env.OPENCLAW_AGENT_DIR,
+          }),
+      });
     }
 
     const auth = await this.resolveProjectedAuth({
@@ -791,6 +888,27 @@ export class ChatgptAppsMcpBridge {
     return {
       kind: "degraded",
       config,
+    };
+  }
+
+  private async getSnapshotPublicationState(): Promise<
+    Extract<PublicationState, { kind: "snapshot" }>
+  > {
+    const refreshResult = await this.ensureFreshSnapshot({
+      loadOpenClawConfig: this.loadOpenClawConfig,
+      env: this.env,
+      workspaceDir: this.workspaceDir,
+      hardRefresh: false,
+      refreshTimeoutMs: INITIAL_WILDCARD_REFRESH_TIMEOUT_MS,
+    });
+    if (refreshResult.status !== "ok") {
+      throw new Error(refreshResult.message);
+    }
+
+    return {
+      kind: "snapshot",
+      config: refreshResult.config,
+      snapshot: refreshResult.snapshot,
     };
   }
 
@@ -885,6 +1003,7 @@ export class ChatgptAppsMcpBridge {
       statuses: snapshot.statuses,
       allowedConnectorIds,
     });
+    const appRouteByConnectorId = buildAppInvocationRouteByConnectorId(snapshot.inventory);
 
     for (const tool of remoteTools) {
       const connectorId =
@@ -898,10 +1017,16 @@ export class ChatgptAppsMcpBridge {
         continue;
       }
 
+      const publishedName = rewriteToolName(connectorId, tool.name);
+      const appRoute = appRouteByConnectorId.get(connectorId);
       const route = {
         connectorId,
+        publishedName,
         remoteName: tool.name,
         remoteMeta: isRecord(tool._meta) ? { ...tool._meta } : undefined,
+        appId: appRoute?.appId,
+        appName: appRoute?.appName,
+        appInvocationToken: appRoute?.appInvocationToken,
       };
       const rewritten = withRoutingMetadata(tool, route);
       tools.push(rewritten);
@@ -951,8 +1076,10 @@ export class ChatgptAppsMcpBridge {
         continue;
       }
 
+      const publishedName = rewriteToolName(connectorId, tool.name);
       const route = {
         connectorId,
+        publishedName,
         remoteName: tool.name,
         remoteMeta: isRecord(tool._meta) ? { ...tool._meta } : undefined,
       };

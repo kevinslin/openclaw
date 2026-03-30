@@ -58,6 +58,7 @@ Example with one explicitly enabled connector:
         "enabled": true,
         "config": {
           "enabled": true,
+          "appInvokePath": "appServer",
           "connectors": {
             "gmail": {
               "enabled": true
@@ -85,6 +86,7 @@ To enable all accessible ChatGPT apps, use `*`:
         "enabled": true,
         "config": {
           "enabled": true,
+          "appInvokePath": "appServer",
           "connectors": {
             "*": {
               "enabled": true
@@ -107,6 +109,7 @@ You can combine wildcard enablement with explicit disables if needed:
         "enabled": true,
         "config": {
           "enabled": true,
+          "appInvokePath": "appServer",
           "connectors": {
             "*": {
               "enabled": true
@@ -125,6 +128,7 @@ You can combine wildcard enablement with explicit disables if needed:
 ## Config Reference
 
 - `enabled`: Turns the bundle-owned ChatGPT apps bridge on or off.
+- `appInvokePath`: Chooses how published tools execute. `appServer` is the default and starts a fresh app-server thread for each tool call. `remoteMCP` keeps the older direct remote MCP call path.
 - `connectors`: Per-app enablement map. Use explicit connector ids like `gmail`, `linear`, or `google_calendar`.
 - `connectors["*"]`: Enables all accessible ChatGPT apps, with explicit connector entries able to disable individual apps.
 - `appServer.command` / `appServer.args`: Override how the bundle launches `codex app-server`.

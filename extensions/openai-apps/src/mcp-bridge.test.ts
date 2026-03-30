@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
+import type { ChatgptAppsConfig } from "./config.js";
 import { ChatgptAppsMcpBridge } from "./mcp-bridge.js";
 import type { RemoteCodexAppsClientFactory } from "./remote-codex-apps-client.js";
 import type { PersistedConnectorSnapshot } from "./snapshot-cache.js";
@@ -16,6 +17,7 @@ function createConfig(): OpenClawConfig {
         "openai-apps": {
           config: {
             enabled: true,
+            appInvokePath: "remoteMCP",
             connectors: {
               slack: { enabled: true },
             },
@@ -33,6 +35,7 @@ function createWildcardConfig(): OpenClawConfig {
         "openai-apps": {
           config: {
             enabled: true,
+            appInvokePath: "remoteMCP",
             connectors: {
               "*": { enabled: true },
             },
@@ -41,6 +44,41 @@ function createWildcardConfig(): OpenClawConfig {
       },
     },
   } as OpenClawConfig;
+}
+
+function createAppServerConfig(): OpenClawConfig {
+  return {
+    plugins: {
+      entries: {
+        "openai-apps": {
+          config: {
+            enabled: true,
+            appInvokePath: "appServer",
+            connectors: {
+              slack: { enabled: true },
+            },
+          },
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
+function createResolvedBundleConfig(params: {
+  connectors: Record<string, { enabled: boolean }>;
+  appInvokePath?: ChatgptAppsConfig["appInvokePath"];
+}): ChatgptAppsConfig {
+  return {
+    enabled: true,
+    appInvokePath: params.appInvokePath ?? "remoteMCP",
+    appServer: { command: "codex", args: [] },
+    linking: {
+      enabled: false,
+      waitTimeoutMs: 60_000,
+      pollIntervalMs: 3_000,
+    },
+    connectors: params.connectors,
+  };
 }
 
 function createPersistedSnapshot(): PersistedConnectorSnapshot {
@@ -291,6 +329,63 @@ describe("ChatgptAppsMcpBridge", () => {
     });
   });
 
+  it("routes tools/call through app-server when appInvokePath is appServer", async () => {
+    const stateDir = await createStateDir();
+    await writeSnapshot(stateDir);
+    const appServerInvoker = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "app-server result" }],
+    }));
+    const remoteClientFactory = vi.fn(async () => {
+      throw new Error("remote MCP should not be used for appServer invocation");
+    });
+
+    const bridge = new ChatgptAppsMcpBridge({
+      loadOpenClawConfig: () => createAppServerConfig(),
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+      ensureFreshSnapshot: async () => {
+        await new Promise(() => {});
+        throw new Error("unreachable");
+      },
+      resolveProjectedAuth: async () => ({
+        status: "ok",
+        accessToken: "access-token",
+        accountId: "acct_123",
+        planType: null,
+        profileId: "openai-codex:default",
+        identity: { email: "user@example.com", profileName: "user@example.com" },
+      }),
+      remoteClientFactory,
+      appServerInvoker,
+    });
+
+    await bridge.listTools();
+    const result = await bridge.callTool("chatgpt_app__slack__slack_send", {
+      text: "hello",
+    });
+
+    expect(appServerInvoker).toHaveBeenCalledWith(
+      expect.objectContaining({
+        route: expect.objectContaining({
+          connectorId: "slack",
+          publishedName: "chatgpt_app__slack__slack_send",
+          remoteName: "slack_send",
+          appId: "slack",
+          appName: "Slack",
+        }),
+        args: {
+          text: "hello",
+        },
+      }),
+    );
+    expect(remoteClientFactory).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      content: [{ type: "text", text: "app-server result" }],
+    });
+  });
+
   it("drops remote output schemas so tool errors do not fail local validation", async () => {
     const stateDir = await createStateDir();
     const snapshot = createPersistedSnapshot();
@@ -530,18 +625,11 @@ describe("ChatgptAppsMcpBridge", () => {
         status: "error",
         reason: "refresh",
         message: "Timed out refreshing ChatGPT apps snapshot",
-        config: {
-          enabled: true,
-          appServer: { command: "codex", args: [] },
-          linking: {
-            enabled: false,
-            waitTimeoutMs: 60_000,
-            pollIntervalMs: 3_000,
-          },
+        config: createResolvedBundleConfig({
           connectors: {
             slack: { enabled: true },
           },
-        },
+        }),
         openclawConfig: createConfig(),
         statePaths: resolveChatgptAppsStatePaths({
           OPENCLAW_STATE_DIR: path.join(os.tmpdir(), "openclaw-chatgpt-apps-bridge"),
@@ -634,18 +722,11 @@ describe("ChatgptAppsMcpBridge", () => {
         status: "error",
         reason: "refresh",
         message: "Timed out refreshing ChatGPT apps snapshot",
-        config: {
-          enabled: true,
-          appServer: { command: "codex", args: [] },
-          linking: {
-            enabled: false,
-            waitTimeoutMs: 60_000,
-            pollIntervalMs: 3_000,
-          },
+        config: createResolvedBundleConfig({
           connectors: {
             "*": { enabled: true },
           },
-        },
+        }),
         openclawConfig: createWildcardConfig(),
         statePaths: resolveChatgptAppsStatePaths({
           OPENCLAW_STATE_DIR: path.join(os.tmpdir(), "openclaw-chatgpt-apps-bridge"),
@@ -721,18 +802,11 @@ describe("ChatgptAppsMcpBridge", () => {
         status: "ok",
         source: "refresh",
         snapshot,
-        config: {
-          enabled: true,
-          appServer: { command: "codex", args: [] },
-          linking: {
-            enabled: false,
-            waitTimeoutMs: 60_000,
-            pollIntervalMs: 3_000,
-          },
+        config: createResolvedBundleConfig({
           connectors: {
             "*": { enabled: true },
           },
-        },
+        }),
         openclawConfig: createWildcardConfig(),
         statePaths: resolveChatgptAppsStatePaths({
           OPENCLAW_STATE_DIR: path.join(os.tmpdir(), "openclaw-chatgpt-apps-bridge"),
@@ -799,18 +873,11 @@ describe("ChatgptAppsMcpBridge", () => {
       status: "ok" as const,
       source: "refresh" as const,
       snapshot: refreshedSnapshot,
-      config: {
-        enabled: true,
-        appServer: { command: "codex", args: [] },
-        linking: {
-          enabled: false,
-          waitTimeoutMs: 60_000,
-          pollIntervalMs: 3_000,
-        },
+      config: createResolvedBundleConfig({
         connectors: {
           "*": { enabled: true },
         },
-      },
+      }),
       openclawConfig: createWildcardConfig(),
       statePaths: resolveChatgptAppsStatePaths({
         OPENCLAW_STATE_DIR: stateDir,
@@ -882,18 +949,11 @@ describe("ChatgptAppsMcpBridge", () => {
         status: "ok",
         source: "refresh",
         snapshot,
-        config: {
-          enabled: true,
-          appServer: { command: "codex", args: [] },
-          linking: {
-            enabled: false,
-            waitTimeoutMs: 60_000,
-            pollIntervalMs: 3_000,
-          },
+        config: createResolvedBundleConfig({
           connectors: {
             "*": { enabled: true },
           },
-        },
+        }),
         openclawConfig: createWildcardConfig(),
         statePaths: resolveChatgptAppsStatePaths({
           OPENCLAW_STATE_DIR: path.join(os.tmpdir(), "openclaw-chatgpt-apps-bridge"),
@@ -1032,18 +1092,11 @@ describe("ChatgptAppsMcpBridge", () => {
         status: "error",
         reason: "refresh",
         message: "Timed out refreshing ChatGPT apps snapshot",
-        config: {
-          enabled: true,
-          appServer: { command: "codex", args: [] },
-          linking: {
-            enabled: false,
-            waitTimeoutMs: 60_000,
-            pollIntervalMs: 3_000,
-          },
+        config: createResolvedBundleConfig({
           connectors: {
             slack: { enabled: true },
           },
-        },
+        }),
         openclawConfig: createConfig(),
         statePaths: resolveChatgptAppsStatePaths({
           OPENCLAW_STATE_DIR: path.join(os.tmpdir(), "openclaw-chatgpt-apps-bridge"),
@@ -1133,18 +1186,11 @@ describe("ChatgptAppsMcpBridge", () => {
         status: "error",
         reason: "refresh",
         message: "Timed out refreshing ChatGPT apps snapshot",
-        config: {
-          enabled: true,
-          appServer: { command: "codex", args: [] },
-          linking: {
-            enabled: false,
-            waitTimeoutMs: 60_000,
-            pollIntervalMs: 3_000,
-          },
+        config: createResolvedBundleConfig({
           connectors: {
             gong: { enabled: true },
           },
-        },
+        }),
         openclawConfig: createConfig(),
         statePaths: resolveChatgptAppsStatePaths({
           OPENCLAW_STATE_DIR: path.join(os.tmpdir(), "openclaw-chatgpt-apps-bridge"),
@@ -1230,18 +1276,11 @@ describe("ChatgptAppsMcpBridge", () => {
         status: "error",
         reason: "refresh",
         message: "Timed out refreshing ChatGPT apps snapshot",
-        config: {
-          enabled: true,
-          appServer: { command: "codex", args: [] },
-          linking: {
-            enabled: false,
-            waitTimeoutMs: 60_000,
-            pollIntervalMs: 3_000,
-          },
+        config: createResolvedBundleConfig({
           connectors: {
             google_drive_batch_update: { enabled: true },
           },
-        },
+        }),
         openclawConfig: createConfig(),
         statePaths: resolveChatgptAppsStatePaths({
           OPENCLAW_STATE_DIR: path.join(os.tmpdir(), "openclaw-chatgpt-apps-bridge"),

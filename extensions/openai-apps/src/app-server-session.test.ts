@@ -11,6 +11,7 @@ type LoginAccountResponse = protocol.v2.LoginAccountResponse;
 
 const config: ChatgptAppsConfig = {
   enabled: true,
+  appInvokePath: "appServer",
   appServer: {
     command: "codex",
     args: [],
