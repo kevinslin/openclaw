@@ -166,7 +166,7 @@ function createMockClient(
 
 describe("invokeViaAppServer", () => {
   // TODO: add back mentions
-  it.todo("creates a fresh thread and starts a turn without a per-call codex_apps warmup", async () => {
+  it("creates a fresh thread and starts a turn without a per-call codex_apps warmup", async () => {
     const startThread = vi.fn<AppServerInvocationClient["startThread"]>(async () =>
       createThreadStartResponse(),
     );
@@ -235,14 +235,14 @@ describe("invokeViaAppServer", () => {
           type: "object",
           required: ["status", "result", "error"],
         }),
-        input: [
+        input: expect.arrayContaining([
           expect.objectContaining({
             type: "text",
             text: expect.stringContaining("Summarize my recent emails"),
           }),
-        ],
+        ]),
       }),
-      expect.any(Object),
+      { timeoutMs: 180_000 },
     );
     expect(runTurn.mock.calls[0]?.[0].input[0]).toEqual(
       expect.objectContaining({
