@@ -5,6 +5,12 @@
 - Run the bundle test suite with Vitest: `pnpm test -- extensions/openai-apps/src`
 - Run the live integration harness in full mode: `./scripts/test-chatapps-integ.sh full`
 
+## Review-Ready Handoff
+
+- Before notifying that a job is ready to review, stage all relevant changes and manually run the repo pre-commit hook with `bash git-hooks/pre-commit`.
+- If the pre-commit hook reports issues, fix them, restage any updated files, and rerun the hook.
+- Do not send the ready-to-review notification until the staged tree passes the pre-commit hook cleanly.
+
 ## Integration Harness Notes
 
 - The integration harness runs under the dedicated OpenClaw profile `chatapps-integ`.
