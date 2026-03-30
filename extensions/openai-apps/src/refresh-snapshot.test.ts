@@ -171,7 +171,7 @@ describe("ensureFreshSnapshot", () => {
     expect(captureSnapshot).toHaveBeenCalledTimes(2);
   });
 
-  it("preserves the last good snapshot when refresh fails", async () => {
+  it("returns a hard refresh error while keeping the last good snapshot on disk", async () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chatgpt-apps-"));
     const env = {
       OPENCLAW_STATE_DIR: tempRoot,
@@ -213,8 +213,9 @@ describe("ensureFreshSnapshot", () => {
     });
 
     expect(failed).toMatchObject({
-      status: "ok",
-      source: "stale-cache",
+      status: "error",
+      reason: "refresh",
+      message: "sidecar launch failed",
     });
     const snapshot = await readPersistedSnapshot(statePaths.snapshotPath);
     expect(snapshot?.accountId).toBe("acct_123");

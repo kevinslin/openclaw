@@ -19,7 +19,7 @@ const REFRESH_TIMEOUT_MS = 10_000;
 export type EnsureFreshSnapshotResult =
   | {
       status: "ok";
-      source: "cache" | "refresh" | "stale-cache";
+      source: "cache" | "refresh";
       snapshot: PersistedConnectorSnapshot;
       config: ReturnType<typeof resolveChatgptAppsConfig>;
       openclawConfig: OpenClawConfig;
@@ -210,28 +210,6 @@ export async function ensureFreshSnapshot(params: {
       statePaths,
     };
   } catch (error) {
-    if (canReuseStaleSnapshot({ snapshot: currentSnapshot, auth })) {
-      const staleSnapshot = currentSnapshot!;
-      await writeRefreshDebug({
-        statePaths,
-        debug: {
-          updatedAt: new Date(now()).toISOString(),
-          status: "failure",
-          source: "cache",
-          message: error instanceof Error ? error.message : String(error),
-          accountId: auth.accountId,
-        },
-      });
-      return {
-        status: "ok",
-        source: "stale-cache",
-        snapshot: staleSnapshot,
-        config,
-        openclawConfig,
-        statePaths,
-      };
-    }
-
     await writeRefreshDebug({
       statePaths,
       debug: {
@@ -250,19 +228,4 @@ export async function ensureFreshSnapshot(params: {
       statePaths,
     };
   }
-}
-
-function canReuseStaleSnapshot(params: {
-  snapshot: PersistedConnectorSnapshot | null;
-  auth: Extract<ChatgptAppsResolvedAuth, { status: "ok" }>;
-}): params is {
-  snapshot: PersistedConnectorSnapshot;
-  auth: Extract<ChatgptAppsResolvedAuth, { status: "ok" }>;
-} {
-  return (
-    params.snapshot !== null &&
-    params.snapshot.version === SNAPSHOT_VERSION &&
-    params.snapshot.accountId === params.auth.accountId &&
-    params.snapshot.authIdentityKey === buildAuthIdentityKey(params.auth.identity)
-  );
 }

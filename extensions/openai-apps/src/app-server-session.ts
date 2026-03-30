@@ -47,6 +47,7 @@ type ChatgptAppsRpcClient = {
           chatgptPlanType?: string | null;
         }>,
   ): () => void;
+  request(method: string, params?: unknown): Promise<unknown>;
   loginAccount(params: LoginAccountParams): Promise<LoginAccountResponse>;
   readAccount(params: GetAccountParams): Promise<GetAccountResponse>;
   getAuthStatus(params: {
@@ -59,6 +60,22 @@ type ChatgptAppsRpcClient = {
   close(): Promise<void>;
 };
 
+type AppServerSessionParams = {
+  config: ChatgptAppsConfig;
+  statePaths: ChatgptAppsStatePaths;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  resolveProjectedAuth: ProjectedAuthResolver;
+  clientFactory?: (params: {
+    command: string;
+    args: string[];
+    cwd?: string;
+    env: NodeJS.ProcessEnv;
+  }) => Promise<ChatgptAppsRpcClient>;
+};
+
+type LoggedInAppServerAuth = Extract<ChatgptAppsResolvedAuth, { status: "ok" }>;
+
 function toLoginParams(
   auth: Extract<ChatgptAppsResolvedAuth, { status: "ok" }>,
 ): LoginAccountParams {
@@ -70,22 +87,50 @@ function toLoginParams(
   };
 }
 
-export async function captureAppServerSnapshot(params: {
-  config: ChatgptAppsConfig;
-  statePaths: ChatgptAppsStatePaths;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  resolveProjectedAuth: ProjectedAuthResolver;
-  now?: () => number;
-  clientFactory?: (params: {
-    command: string;
-    args: string[];
-    cwd?: string;
-    env: NodeJS.ProcessEnv;
-  }) => Promise<ChatgptAppsRpcClient>;
-}): Promise<AppServerRefreshCapture> {
+async function createAppServerRpcClient(factoryParams: {
+  command: string;
+  args: string[];
+  cwd?: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<ChatgptAppsRpcClient> {
+  const client = await CodexAppServerClient.spawn({
+    bin: factoryParams.command,
+    args: factoryParams.args,
+    cwd: factoryParams.cwd,
+    env: factoryParams.env,
+    analyticsDefaultEnabled: true,
+  });
+  return {
+    initializeSession: () => client.initializeSession(),
+    handleChatgptAuthTokensRefresh: (handler) =>
+      client.handleChatgptAuthTokensRefresh(async () => {
+        const response = await handler();
+        return {
+          ...response,
+          chatgptPlanType: response.chatgptPlanType ?? null,
+        };
+      }),
+    request: (method, requestParams) => client.request(method, requestParams),
+    loginAccount: (loginParams) => client.loginAccount(loginParams),
+    readAccount: (readParams) => client.readAccount(readParams),
+    getAuthStatus: (statusParams) => client.getAuthStatus(statusParams),
+    listApps: (listParams) => client.listApps(listParams),
+    listMcpServerStatus: (listParams) => client.listMcpServerStatus(listParams),
+    writeConfigValue: (writeParams) => client.writeConfigValue(writeParams),
+    close: async () => {
+      await client.close();
+    },
+  } satisfies ChatgptAppsRpcClient;
+}
+
+async function withLoggedInAppServerSession<TResult>(
+  params: AppServerSessionParams,
+  handler: (context: {
+    auth: LoggedInAppServerAuth;
+    client: ChatgptAppsRpcClient;
+  }) => Promise<TResult>,
+): Promise<TResult> {
   const env = params.env ?? process.env;
-  const now = params.now ?? Date.now;
   const auth = await params.resolveProjectedAuth();
   if (auth.status !== "ok") {
     throw new Error(auth.message);
@@ -98,35 +143,7 @@ export async function captureAppServerSnapshot(params: {
   });
   const clientFactory =
     params.clientFactory ??
-    (async (factoryParams) => {
-      const client = await CodexAppServerClient.spawn({
-        bin: factoryParams.command,
-        args: factoryParams.args,
-        cwd: factoryParams.cwd,
-        env: factoryParams.env,
-        analyticsDefaultEnabled: true,
-      });
-      return {
-        initializeSession: () => client.initializeSession(),
-        handleChatgptAuthTokensRefresh: (handler) =>
-          client.handleChatgptAuthTokensRefresh(async () => {
-            const response = await handler();
-            return {
-              ...response,
-              chatgptPlanType: response.chatgptPlanType ?? null,
-            };
-          }),
-        loginAccount: (loginParams) => client.loginAccount(loginParams),
-        readAccount: (readParams) => client.readAccount(readParams),
-        getAuthStatus: (statusParams) => client.getAuthStatus(statusParams),
-        listApps: (listParams) => client.listApps(listParams),
-        listMcpServerStatus: (listParams) => client.listMcpServerStatus(listParams),
-        writeConfigValue: (writeParams) => client.writeConfigValue(writeParams),
-        close: async () => {
-          await client.close();
-        },
-      } satisfies ChatgptAppsRpcClient;
-    });
+    (async (factoryParams) => await createAppServerRpcClient(factoryParams));
   const client = await clientFactory({
     command: resolvedCommand,
     args: params.config.appServer.args,
@@ -160,6 +177,36 @@ export async function captureAppServerSnapshot(params: {
       expectedVersion: null,
     });
 
+    return await handler({ auth, client });
+  } finally {
+    unsubscribe?.();
+    await client.close();
+  }
+}
+
+export async function callAppServerMethod(
+  params: AppServerSessionParams & {
+    method: string;
+    methodParams?: unknown;
+  },
+): Promise<unknown> {
+  const method = params.method.trim();
+  if (!method) {
+    throw new Error("App server method name is required");
+  }
+
+  return await withLoggedInAppServerSession(params, async ({ client }) => {
+    return await client.request(method, params.methodParams);
+  });
+}
+
+export async function captureAppServerSnapshot(
+  params: AppServerSessionParams & {
+    now?: () => number;
+  },
+): Promise<AppServerRefreshCapture> {
+  const now = params.now ?? Date.now;
+  return await withLoggedInAppServerSession(params, async ({ client }) => {
     const inventory: AppInfo[] = [];
     let appCursor: string | null = null;
     do {
@@ -185,10 +232,7 @@ export async function captureAppServerSnapshot(params: {
       account: accountResponse.account,
       authStatus,
     };
-  } finally {
-    unsubscribe?.();
-    await client.close();
-  }
+  });
 }
 
 async function listMcpServerStatuses(client: ChatgptAppsRpcClient): Promise<McpServerStatus[]> {
@@ -205,12 +249,21 @@ async function listMcpServerStatuses(client: ChatgptAppsRpcClient): Promise<McpS
     return statuses;
   };
 
-  return await Promise.race([
-    listStatuses(),
-    new Promise<McpServerStatus[]>((_, reject) => {
-      setTimeout(() => {
-        reject(new Error("Timed out reading mcpServerStatus/list"));
-      }, MCP_SERVER_STATUS_TIMEOUT_MS);
-    }),
-  ]);
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await Promise.race([
+      listStatuses(),
+      new Promise<McpServerStatus[]>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error("Timed out reading mcpServerStatus/list"));
+        }, MCP_SERVER_STATUS_TIMEOUT_MS);
+        timeoutHandle.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle !== null) {
+      clearTimeout(timeoutHandle);
+    }
+  }
 }

@@ -14,7 +14,6 @@ import type { ChatgptAppsStatePaths } from "./state-paths.js";
 
 type ConfigValueWriteParams = protocol.v2.ConfigValueWriteParams;
 type ConfigWriteResponse = protocol.v2.ConfigWriteResponse;
-type AppsListResponse = protocol.v2.AppsListResponse;
 type GetAuthStatusResponse = protocol.GetAuthStatusResponse;
 type GetAccountResponse = protocol.v2.GetAccountResponse;
 type LoginAccountParams = protocol.v2.LoginAccountParams;
@@ -27,12 +26,35 @@ type UserInput = protocol.v2.UserInput;
 
 const TURN_TIMEOUT_MS = 180_000;
 
+function resolveConversationSessionId(env: NodeJS.ProcessEnv | undefined): string | null {
+  for (const candidate of [
+    env?.OPENCLAW_SESSION_ID,
+    env?.OPENCLAW_CONVERSATION_ID,
+    env?.OPENCLAW_SESSION_KEY,
+  ]) {
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+  return null;
+}
+
+function serializeDebugValue(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return JSON.stringify(String(value));
+  }
+}
+
 function writeDebugLog(
   env: NodeJS.ProcessEnv | undefined,
   message: string,
   debugRootDir?: string,
 ): void {
-  const line = `[openai-apps] ${new Date().toISOString()} ${message}\n`;
+  const conversationSessionId = resolveConversationSessionId(env);
+  const context = conversationSessionId ? ` conversationSessionId=${conversationSessionId}` : "";
+  const line = `[openai-apps] ${new Date().toISOString()}${context} ${message}\n`;
   if (env?.OPENCLAW_OPENAI_APPS_DEBUG === "1") {
     process.stderr.write(line);
   }
@@ -48,9 +70,11 @@ function writeDebugLog(
 
 export type AppServerInvocationRoute = {
   connectorId: string;
+  appId: string;
   publishedName: string;
   appName: string;
   appInvocationToken: string;
+  availableToolNames: string[];
 };
 
 type ProjectedAuthResolver = () => Promise<ChatgptAppsResolvedAuth>;
@@ -83,11 +107,6 @@ export type AppServerInvocationClient = {
     experimentalRawEvents: boolean;
     persistExtendedHistory: boolean;
   }): Promise<ThreadStartResponse>;
-  listApps(params: {
-    cursor?: string | null;
-    threadId?: string | null;
-    forceRefetch?: boolean;
-  }): Promise<AppsListResponse>;
   runTurn(
     params: {
       threadId: string;
@@ -157,16 +176,24 @@ function buildInvocationInput(
   args: Record<string, unknown> | undefined,
 ): UserInput[] {
   const request = readInvocationRequest(args);
+  const capabilityGuidance =
+    route.availableToolNames.length > 0
+      ? `\n\nAvailable ${route.appName} connector tools in this session include: ${route.availableToolNames
+          .slice(0, 12)
+          .join(
+            ", ",
+          )}. Use the available tools when relevant, and only say a capability is unavailable if a tool call or permission check actually fails.`
+      : "";
   return [
     {
       type: "text",
-      text: `$${route.appInvocationToken} ${request}`,
+      text: `$${route.appInvocationToken} ${request}${capabilityGuidance}`,
       text_elements: [],
     },
     {
       type: "mention",
       name: route.appName,
-      path: `app://${route.connectorId}`,
+      path: `app://${route.appId}`,
     },
   ];
 }
@@ -214,6 +241,23 @@ function extractTurnText(response: ThreadReadResponse, turnId: string): string |
 
 function buildApprovalError(prefix: string, detail?: string | null): Error {
   return new Error(detail ? `${prefix}: ${detail}` : prefix);
+}
+
+function buildUnsupportedServerRequestError(message: string | null | undefined): Error | null {
+  const trimmed = message?.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const match =
+    trimmed.match(/(?:unsupported|unhandled).*server request[:\s]+([a-z0-9_./-]+)/i) ??
+    trimmed.match(/\b(item\/tool\/call)\b/i);
+  const method = match?.[1]?.trim();
+  if (!method) {
+    return null;
+  }
+
+  return new Error(`App invocation requested unsupported server request: ${method}`);
 }
 
 export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
@@ -266,7 +310,6 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
         getAuthStatus: (statusParams) => client.getAuthStatus(statusParams),
         writeConfigValue: (writeParams) => client.writeConfigValue(writeParams),
         startThread: (startParams) => client.startThread(startParams),
-        listApps: (listParams) => client.listApps(listParams),
         runTurn: (turnParams, options) => client.runTurn(turnParams, options),
         readThread: (readParams) => client.readThread(readParams),
         handleServerRequest: (method, handler) => client.handleServerRequest(method, handler),
@@ -371,6 +414,24 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
       buildApprovalError("App invocation requested MCP elicitation"),
     );
 
+    let invocationInput: UserInput[];
+    try {
+      invocationInput = buildInvocationInput(params.route, params.args);
+      writeDebugLog(
+        env,
+        `buildInvocationInput route=${serializeDebugValue(params.route)} args=${serializeDebugValue(params.args)} input=${serializeDebugValue(invocationInput)}`,
+        params.statePaths.rootDir,
+      );
+    } catch (error) {
+      const normalizedError = error instanceof Error ? error : new Error(String(error));
+      writeDebugLog(
+        env,
+        `buildInvocationInput failed route=${serializeDebugValue(params.route)} args=${serializeDebugValue(params.args)} error=${serializeDebugValue(normalizedError.message)}`,
+        params.statePaths.rootDir,
+      );
+      throw normalizedError;
+    }
+
     writeDebugLog(env, "app-server thread start request", params.statePaths.rootDir);
     const threadStart = await client.startThread({
       cwd: params.workspaceDir ?? null,
@@ -385,7 +446,7 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
     const run = await client.runTurn(
       {
         threadId,
-        input: buildInvocationInput(params.route, params.args),
+        input: invocationInput,
       },
       { timeoutMs: TURN_TIMEOUT_MS },
     );
@@ -399,6 +460,12 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
       throw serverRequestError;
     }
     if (run.completed.turn.status !== "completed") {
+      const unsupportedServerRequestError = buildUnsupportedServerRequestError(
+        run.completed.turn.error?.message ?? null,
+      );
+      if (unsupportedServerRequestError) {
+        throw unsupportedServerRequestError;
+      }
       const message =
         run.completed.turn.error?.message ?? `Turn ended with status ${run.completed.turn.status}`;
       throw new Error(message);
@@ -418,9 +485,12 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
       content: [{ type: "text", text }],
     };
   } catch (error) {
-    const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
+    const normalizedError =
+      buildUnsupportedServerRequestError(error instanceof Error ? error.message : String(error)) ??
+      (error instanceof Error ? error : new Error(String(error)));
+    const message = normalizedError.stack ?? normalizedError.message;
     writeDebugLog(env, `app-server invoke failed error=${message}`, params.statePaths.rootDir);
-    throw error;
+    throw normalizedError;
   } finally {
     for (const unsubscribe of unsubscribeDebugListeners) {
       unsubscribe();

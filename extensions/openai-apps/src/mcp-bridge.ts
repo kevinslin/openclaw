@@ -194,9 +194,11 @@ function buildAppRouteByConnectorId(inventory: AppInfo[]): Map<string, BridgeRou
       }
       routes.set(connectorId, {
         connectorId,
+        appId: app.id,
         publishedName: `chatgpt_app_${connectorId}`,
         appName: app.name || app.pluginDisplayNames[0] || connectorId,
         appInvocationToken: deriveAppInvocationToken(app, connectorId),
+        availableToolNames: [],
       });
     }
   }
@@ -207,6 +209,40 @@ function buildAppRouteByConnectorId(inventory: AppInfo[]): Map<string, BridgeRou
 function buildStatusByConnectorId(statuses: McpServerStatus[]): Map<string, McpServerStatus> {
   const map = new Map<string, McpServerStatus>();
   for (const status of statuses) {
+    const statusTools = isRecord(status.tools)
+      ? (status.tools as Record<string, McpServerStatus["tools"][string]>)
+      : {};
+
+    let mappedTool = false;
+    for (const [toolName, tool] of Object.entries(statusTools)) {
+      const meta = isRecord(tool) && isRecord(tool._meta) ? tool._meta : null;
+      const connectorName = typeof meta?.connector_name === "string" ? meta.connector_name : null;
+      const connectorId = connectorName ? normalizeConnectorKey(connectorName) : "";
+      if (!connectorId || shouldExcludeConnectorId(connectorId)) {
+        continue;
+      }
+
+      mappedTool = true;
+      const existing = map.get(connectorId);
+      if (existing) {
+        existing.tools ??= {};
+        existing.tools[toolName] = tool;
+        continue;
+      }
+
+      map.set(connectorId, {
+        ...status,
+        name: connectorId,
+        tools: {
+          [toolName]: tool,
+        },
+      });
+    }
+
+    if (mappedTool) {
+      continue;
+    }
+
     const connectorId = normalizeConnectorKey(status.name);
     if (!connectorId || shouldExcludeConnectorId(connectorId) || map.has(connectorId)) {
       continue;
@@ -216,10 +252,10 @@ function buildStatusByConnectorId(statuses: McpServerStatus[]): Map<string, McpS
   return map;
 }
 
-function buildToolDescription(app: AppInfo, status?: McpServerStatus): string {
-  const toolCount = status ? Object.keys(status.tools ?? {}).length : 0;
+function buildToolDescription(app: AppInfo, status: McpServerStatus): string {
+  const toolCount = Object.keys(status.tools ?? {}).length;
   const lead =
-    app.description?.trim() || `Use ${app.name || status?.name || app.id} through ChatGPT apps.`;
+    app.description?.trim() || `Use ${app.name || status.name || app.id} through ChatGPT apps.`;
   const capabilitySuffix =
     toolCount > 0
       ? ` The app exposes ${toolCount} server-side capability${toolCount === 1 ? "" : "ies"}.`
@@ -227,7 +263,7 @@ function buildToolDescription(app: AppInfo, status?: McpServerStatus): string {
   return `${lead}${capabilitySuffix} Send a natural-language instruction in the request field.`;
 }
 
-function buildPublishedTool(route: BridgeRoute, app: AppInfo, status?: McpServerStatus): Tool {
+function buildPublishedTool(route: BridgeRoute, app: AppInfo, status: McpServerStatus): Tool {
   return {
     name: route.publishedName,
     description: buildToolDescription(app, status),
@@ -349,11 +385,6 @@ export class ChatgptAppsMcpBridge {
     return hardRefresh;
   }
 
-  private invalidateToolCache(): void {
-    this.toolCache = null;
-    this.toolCachePromise = null;
-  }
-
   private async getPublicationState(): Promise<PublicationState> {
     const refreshResult = await this.ensureFreshSnapshot({
       loadOpenClawConfig: this.loadOpenClawConfig,
@@ -413,6 +444,9 @@ export class ChatgptAppsMcpBridge {
 
     const appRoutes = buildAppRouteByConnectorId(snapshot.inventory);
     const statusByConnectorId = buildStatusByConnectorId(snapshot.statuses);
+    if (statusByConnectorId.size === 0) {
+      throw new Error("Missing mcpServerStatus/list results for ChatGPT app publication");
+    }
 
     for (const connectorId of [...allowedConnectorIds].sort()) {
       const route = appRoutes.get(connectorId);
@@ -427,9 +461,19 @@ export class ChatgptAppsMcpBridge {
       }
 
       const status = statusByConnectorId.get(connectorId);
-      const tool = buildPublishedTool(route, app, status);
+      if (!status) {
+        throw new Error(
+          `Incomplete mcpServerStatus/list results for ChatGPT app publication: ${connectorId}`,
+        );
+      }
+      const routedToolNames = Object.keys(status.tools ?? {}).sort();
+      const routedRoute: BridgeRoute = {
+        ...route,
+        availableToolNames: routedToolNames,
+      };
+      const tool = buildPublishedTool(routedRoute, app, status);
       tools.push(tool);
-      routes.set(tool.name, route);
+      routes.set(tool.name, routedRoute);
     }
 
     return {

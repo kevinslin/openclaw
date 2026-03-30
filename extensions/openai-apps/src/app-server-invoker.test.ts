@@ -119,26 +119,6 @@ function createMockClient(
       overriddenMetadata: null,
     }),
     startThread: async () => createThreadStartResponse(),
-    listApps: async () => ({
-      data: [
-        {
-          id: "gmail",
-          name: "Gmail",
-          description: null,
-          logoUrl: null,
-          logoUrlDark: null,
-          distributionChannel: null,
-          branding: null,
-          appMetadata: null,
-          labels: null,
-          installUrl: null,
-          isAccessible: true,
-          isEnabled: true,
-          pluginDisplayNames: ["Gmail"],
-        },
-      ],
-      nextCursor: null,
-    }),
     runTurn: async () => ({
       start: {
         turn: {
@@ -210,9 +190,11 @@ describe("invokeViaAppServer", () => {
       config,
       route: {
         connectorId: "gmail",
+        appId: "asdk_app_gmail",
         publishedName: "chatgpt_app_gmail",
         appName: "Gmail",
         appInvocationToken: "gmail",
+        availableToolNames: ["gmail_search_emails", "gmail_read_email"],
       },
       args: { request: "Summarize my recent emails" },
       statePaths,
@@ -242,16 +224,21 @@ describe("invokeViaAppServer", () => {
         input: [
           expect.objectContaining({
             type: "text",
-            text: "$gmail Summarize my recent emails",
+            text: expect.stringContaining("$gmail Summarize my recent emails"),
           }),
           {
             type: "mention",
             name: "Gmail",
-            path: "app://gmail",
+            path: "app://asdk_app_gmail",
           },
         ],
       }),
       expect.any(Object),
+    );
+    expect(runTurn.mock.calls[0]?.[0].input[0]).toEqual(
+      expect.objectContaining({
+        text: expect.stringContaining("gmail_read_email"),
+      }),
     );
     expect(registeredMethods).not.toContain("item/tool/call");
   });
@@ -304,9 +291,11 @@ describe("invokeViaAppServer", () => {
         config,
         route: {
           connectorId: "gmail",
+          appId: "asdk_app_gmail",
           publishedName: "chatgpt_app_gmail",
           appName: "Gmail",
           appInvocationToken: "gmail",
+          availableToolNames: [],
         },
         args: { request: "Summarize my recent emails" },
         statePaths,
@@ -331,9 +320,11 @@ describe("invokeViaAppServer", () => {
         config,
         route: {
           connectorId: "gmail",
+          appId: "asdk_app_gmail",
           publishedName: "chatgpt_app_gmail",
           appName: "Gmail",
           appInvocationToken: "gmail",
+          availableToolNames: [],
         },
         args: {},
         statePaths,
@@ -360,9 +351,11 @@ describe("invokeViaAppServer", () => {
         config,
         route: {
           connectorId: "gmail",
+          appId: "asdk_app_gmail",
           publishedName: "chatgpt_app_gmail",
           appName: "Gmail",
           appInvocationToken: "gmail",
+          availableToolNames: [],
         },
         args: { request: "Summarize my recent emails" },
         statePaths,
@@ -377,5 +370,58 @@ describe("invokeViaAppServer", () => {
         clientFactory: async () => client,
       }),
     ).rejects.toThrow("App invocation completed without a usable final result");
+  });
+
+  it("fails clearly when the app-server reports an unsupported item/tool/call request", async () => {
+    const client = createMockClient({
+      runTurn: async () => ({
+        start: {
+          turn: {
+            id: "turn_123",
+            items: [],
+            status: "inProgress",
+            error: null,
+          },
+        },
+        completed: {
+          threadId: "thr_123",
+          turn: {
+            id: "turn_123",
+            items: [],
+            status: "failed",
+            error: {
+              message: "Unhandled server request: item/tool/call",
+              codexErrorInfo: null,
+              additionalDetails: null,
+            },
+          },
+        },
+      }),
+    });
+
+    await expect(
+      invokeViaAppServer({
+        config,
+        route: {
+          connectorId: "gmail",
+          appId: "asdk_app_gmail",
+          publishedName: "chatgpt_app_gmail",
+          appName: "Gmail",
+          appInvocationToken: "gmail",
+          availableToolNames: [],
+        },
+        args: { request: "Summarize my recent emails" },
+        statePaths,
+        resolveProjectedAuth: async () => ({
+          status: "ok",
+          accessToken: "access-token",
+          accountId: "acct_123",
+          planType: null,
+          profileId: "openai-codex:default",
+          identity: { email: "user@example.com", profileName: "user@example.com" },
+        }),
+        clientFactory: async () => client,
+      }),
+    ).rejects.toThrow("App invocation requested unsupported server request: item/tool/call");
   });
 });

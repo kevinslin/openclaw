@@ -164,9 +164,9 @@ Milestone 2 must make the following runtime contracts explicit:
   are published.
 - Tool naming: Milestone 2 already adopts the final local namespace
   `chatgpt_app__<connectorId>__<toolName>`.
-- Partial metadata policy: if `mcpServerStatus/list` is unavailable and a
-  connector cannot produce publishable tool metadata from the snapshot, that
-  connector stays unpublished rather than falling back to guessed tools.
+- Partial metadata policy: `mcpServerStatus/list` is required for publication.
+  Missing or incomplete status data is a hard publication failure rather than a
+  partial publish.
 
 ### Important Implementation Notes
 
@@ -175,7 +175,7 @@ Milestone 2 must make the following runtime contracts explicit:
   the bridge can accidentally publish.
 - The bridge should rebuild its in-memory tool routing cache when the snapshot
   version changes, even though Milestone 2 only needs that for `tools/list`.
-- Concurrent stale-cache sessions may do duplicate refresh work in the first
+- Concurrent refresh sessions may do duplicate refresh work in the first
   version; atomic snapshot replacement keeps persisted state coherent.
 
 ---
@@ -303,7 +303,7 @@ Manual validation:
 | Auth projection appears to succeed but uses stale or mismatched account context             | High   | Med         | Refresh auth in OpenClaw first, require account id, and persist account-based invalidation metadata          |
 | Failed refresh leaves a half-written snapshot that the bridge publishes                     | High   | Med         | Write snapshots atomically and only replace the previous snapshot on successful completion                   |
 | Tool publication leaks inaccessible connectors because filtering happens in the wrong layer | Med    | Med         | Keep `AppInfo`-based filtering in the bridge and test inaccessible/disabled cases explicitly                 |
-| Multiple stale-cache bridge processes duplicate refresh work                                | Med    | Med         | Accept bounded duplication initially and rely on TTL plus atomic snapshot replacement to keep state coherent |
+| Multiple bridge processes duplicate refresh work                                            | Med    | Med         | Accept bounded duplication initially and rely on TTL plus atomic snapshot replacement to keep state coherent |
 
 ### Simplifications and Assumptions
 

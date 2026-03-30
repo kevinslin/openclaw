@@ -36,7 +36,7 @@ function createPersistedSnapshot(): PersistedConnectorSnapshot {
     baseUrlHash: "base-hash",
     inventory: [
       {
-        id: "slack",
+        id: "asdk_app_slack",
         name: "Slack",
         description: "Chat with Slack workspaces.",
         logoUrl: null,
@@ -222,7 +222,7 @@ describe("ChatgptAppsMcpBridge", () => {
     }
   });
 
-  it("publishes connector tools from inventory even when mcpServerStatus/list data is missing", async () => {
+  it("fails publication when mcpServerStatus/list data is missing", async () => {
     const stateDir = await createStateDir();
     const snapshot = createPersistedSnapshot();
     snapshot.statuses = [];
@@ -265,11 +265,74 @@ describe("ChatgptAppsMcpBridge", () => {
     });
 
     try {
-      await expect(bridge.listTools()).resolves.toEqual([
-        expect.objectContaining({
-          name: "chatgpt_app_slack",
+      await expect(bridge.listTools()).rejects.toThrow(
+        "Missing mcpServerStatus/list results for ChatGPT app publication",
+      );
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  it("fails publication when a configured connector is missing status metadata", async () => {
+    const stateDir = await createStateDir();
+    const snapshot = createPersistedSnapshot();
+    snapshot.inventory.push({
+      id: "gmail",
+      name: "Gmail",
+      description: "Read mail.",
+      logoUrl: null,
+      logoUrlDark: null,
+      distributionChannel: null,
+      branding: null,
+      appMetadata: null,
+      labels: null,
+      installUrl: null,
+      isAccessible: true,
+      isEnabled: true,
+      pluginDisplayNames: ["Gmail"],
+    });
+    await writeSnapshot(stateDir, snapshot);
+
+    const bridge = new ChatgptAppsMcpBridge({
+      loadOpenClawConfig: () => createConfig({ "*": { enabled: true } }),
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+      ensureFreshSnapshot: async () => ({
+        status: "ok",
+        source: "cache",
+        snapshot,
+        config: {
+          enabled: true,
+          appServer: { command: "codex", args: [] },
+          linking: {
+            enabled: false,
+            waitTimeoutMs: 60_000,
+            pollIntervalMs: 3_000,
+          },
+          connectors: { "*": { enabled: true } },
+        },
+        openclawConfig: createConfig({ "*": { enabled: true } }),
+        statePaths: resolveChatgptAppsStatePaths({
+          OPENCLAW_STATE_DIR: stateDir,
+          HOME: os.tmpdir(),
         }),
-      ]);
+      }),
+      resolveProjectedAuth: async () => ({
+        status: "ok",
+        accessToken: "access-token",
+        accountId: "acct_123",
+        planType: null,
+        profileId: "openai-codex:default",
+        identity: { email: "user@example.com", profileName: "user@example.com" },
+      }),
+    });
+
+    try {
+      await expect(bridge.listTools()).rejects.toThrow(
+        "Incomplete mcpServerStatus/list results for ChatGPT app publication: gmail",
+      );
     } finally {
       await bridge.close();
     }
@@ -331,6 +394,7 @@ describe("ChatgptAppsMcpBridge", () => {
         expect.objectContaining({
           route: {
             connectorId: "slack",
+            appId: "asdk_app_slack",
             publishedName: "chatgpt_app_slack",
             appName: "Slack",
             appInvocationToken: "slack",
@@ -340,6 +404,95 @@ describe("ChatgptAppsMcpBridge", () => {
           },
         }),
       );
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  it("derives connector publication from multiplexed codex_apps status metadata", async () => {
+    const stateDir = await createStateDir();
+    const snapshot = createPersistedSnapshot();
+    snapshot.statuses = [
+      {
+        name: "codex_apps",
+        tools: {
+          gmail_search_emails: {
+            name: "gmail_search_emails",
+            description: "Search email",
+            inputSchema: { type: "object" },
+            _meta: {
+              connector_name: "Gmail",
+            },
+          } as unknown as NonNullable<
+            PersistedConnectorSnapshot["statuses"][number]["tools"]
+          >[string],
+        },
+        resources: [],
+        resourceTemplates: [],
+        authStatus: "oAuth",
+      },
+    ];
+    snapshot.inventory = [
+      {
+        id: "gmail",
+        name: "Gmail",
+        description: "Read mail.",
+        logoUrl: null,
+        logoUrlDark: null,
+        distributionChannel: null,
+        branding: null,
+        appMetadata: null,
+        labels: null,
+        installUrl: null,
+        isAccessible: true,
+        isEnabled: true,
+        pluginDisplayNames: ["Gmail"],
+      },
+    ];
+    await writeSnapshot(stateDir, snapshot);
+
+    const bridge = new ChatgptAppsMcpBridge({
+      loadOpenClawConfig: () => createConfig({ gmail: { enabled: true } }),
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+      ensureFreshSnapshot: async () => ({
+        status: "ok",
+        source: "cache",
+        snapshot,
+        config: {
+          enabled: true,
+          appServer: { command: "codex", args: [] },
+          linking: {
+            enabled: false,
+            waitTimeoutMs: 60_000,
+            pollIntervalMs: 3_000,
+          },
+          connectors: { gmail: { enabled: true } },
+        },
+        openclawConfig: createConfig({ gmail: { enabled: true } }),
+        statePaths: resolveChatgptAppsStatePaths({
+          OPENCLAW_STATE_DIR: stateDir,
+          HOME: os.tmpdir(),
+        }),
+      }),
+      resolveProjectedAuth: async () => ({
+        status: "ok",
+        accessToken: "access-token",
+        accountId: "acct_123",
+        planType: null,
+        profileId: "openai-codex:default",
+        identity: { email: "user@example.com", profileName: "user@example.com" },
+      }),
+    });
+
+    try {
+      await expect(bridge.listTools()).resolves.toEqual([
+        expect.objectContaining({
+          name: "chatgpt_app_gmail",
+        }),
+      ]);
     } finally {
       await bridge.close();
     }

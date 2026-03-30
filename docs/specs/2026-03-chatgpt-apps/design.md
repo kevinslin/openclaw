@@ -319,8 +319,8 @@ Write rules:
 
 - refresh writes must be atomic
 - failed refreshes must not replace the last known good snapshot
-- concurrent stale-cache refreshes are allowed initially; atomic writes keep the
-  final snapshot coherent even if duplicate refresh work happens
+- concurrent refreshes are allowed initially; atomic writes keep the final
+  snapshot coherent even if duplicate refresh work happens
 
 #### In-memory tool routing cache
 
@@ -638,7 +638,7 @@ Manual checks:
 - Mitigation: treat the `file:` dependency as local-development-only and gate
   broader rollout on a publishable dependency plan.
 
-3. Without a native service, multiple stale-cache bridge processes can do
+3. Without a native service, multiple bridge processes can do
    duplicate refresh work.
 
 - Mitigation: keep the first version simple, bound duplication with the

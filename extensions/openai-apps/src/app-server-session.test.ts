@@ -1,6 +1,6 @@
 import type { protocol } from "codex-app-server-sdk";
 import { describe, expect, it } from "vitest";
-import { captureAppServerSnapshot } from "./app-server-session.js";
+import { callAppServerMethod, captureAppServerSnapshot } from "./app-server-session.js";
 import type { ChatgptAppsConfig } from "./config.js";
 import type { ChatgptAppsStatePaths } from "./state-paths.js";
 
@@ -34,6 +34,80 @@ const statePaths: ChatgptAppsStatePaths = {
 };
 
 describe("captureAppServerSnapshot", () => {
+  it("logs in, writes config, and calls the requested app-server method", async () => {
+    const events: string[] = [];
+
+    const result = await callAppServerMethod({
+      config,
+      statePaths,
+      method: "mcpServerStatus/list",
+      methodParams: { cursor: null },
+      resolveProjectedAuth: async () => ({
+        status: "ok",
+        accessToken: "access-token",
+        accountId: "acct_123",
+        planType: null,
+        profileId: "openai-codex:default",
+        identity: { email: "user@example.com", profileName: "user@example.com" },
+      }),
+      clientFactory: async () => ({
+        initializeSession: async () => {
+          events.push("initializeSession");
+        },
+        handleChatgptAuthTokensRefresh: () => () => {},
+        request: async (method, params) => {
+          events.push(`request:${method}:${JSON.stringify(params)}`);
+          return { data: [{ name: "gmail" }], nextCursor: null };
+        },
+        loginAccount: async (): Promise<LoginAccountResponse> => {
+          events.push("loginAccount");
+          return { type: "chatgptAuthTokens" };
+        },
+        readAccount: async (): Promise<GetAccountResponse> => ({
+          account: null,
+          requiresOpenaiAuth: false,
+        }),
+        getAuthStatus: async (): Promise<GetAuthStatusResponse> => ({
+          authMethod: "chatgpt",
+          authToken: null,
+          requiresOpenaiAuth: false,
+        }),
+        listApps: async () => ({
+          data: [],
+          nextCursor: null,
+        }),
+        listMcpServerStatus: async () => ({
+          data: [],
+          nextCursor: null,
+        }),
+        writeConfigValue: async (): Promise<ConfigWriteResponse> => {
+          events.push("writeConfigValue");
+          return {
+            status: "ok",
+            version: "1",
+            filePath: "/tmp/openclaw-chatgpt-apps/config.toml",
+            overriddenMetadata: null,
+          };
+        },
+        close: async () => {
+          events.push("close");
+        },
+      }),
+    });
+
+    expect(result).toEqual({
+      data: [{ name: "gmail" }],
+      nextCursor: null,
+    });
+    expect(events).toEqual([
+      "initializeSession",
+      "loginAccount",
+      "writeConfigValue",
+      'request:mcpServerStatus/list:{"cursor":null}',
+      "close",
+    ]);
+  });
+
   it("fails when mcpServerStatus/list is unavailable", async () => {
     const closeCalls: string[] = [];
 
@@ -52,6 +126,7 @@ describe("captureAppServerSnapshot", () => {
         clientFactory: async () => ({
           initializeSession: async () => {},
           handleChatgptAuthTokensRefresh: () => () => {},
+          request: async () => null,
           loginAccount: async (): Promise<LoginAccountResponse> => ({
             type: "chatgptAuthTokens",
           }),
