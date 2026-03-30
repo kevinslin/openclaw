@@ -28,6 +28,15 @@ type TurnStartParams = protocol.v2.TurnStartParams;
 type UserInput = protocol.v2.UserInput;
 
 const TURN_TIMEOUT_MS = 180_000;
+const APP_INVOCATION_APPROVAL_POLICY: NonNullable<ThreadStartParams["approvalPolicy"]> = {
+  granular: {
+    sandbox_approval: false,
+    rules: false,
+    skill_approval: false,
+    request_permissions: true,
+    mcp_elicitations: true,
+  },
+};
 const CONNECTOR_OUTPUT_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -578,7 +587,7 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
     writeDebugLog(env, "app-server thread start request", params.statePaths.rootDir);
     const threadStart = await client.startThread({
       cwd: params.workspaceDir ?? process.cwd(),
-      approvalPolicy: "never",
+      approvalPolicy: APP_INVOCATION_APPROVAL_POLICY,
       developerInstructions: buildDeveloperInstructions(params.route),
       ephemeral: false,
       experimentalRawEvents: false,
@@ -592,7 +601,7 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
       {
         threadId,
         cwd: params.workspaceDir ?? process.cwd(),
-        approvalPolicy: "never",
+        approvalPolicy: APP_INVOCATION_APPROVAL_POLICY,
         outputSchema: CONNECTOR_OUTPUT_SCHEMA as unknown as TurnStartParams["outputSchema"],
         input: invocationInput,
       },

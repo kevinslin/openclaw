@@ -15,11 +15,6 @@ const config: ChatgptAppsConfig = {
     command: "codex",
     args: [],
   },
-  linking: {
-    enabled: false,
-    waitTimeoutMs: 60_000,
-    pollIntervalMs: 3_000,
-  },
   connectors: {
     gmail: { enabled: true },
   },

@@ -85,11 +85,6 @@ describe("ChatgptAppsMcpBridge", () => {
         config: {
           enabled: true,
           appServer: { command: "codex", args: [] },
-          linking: {
-            enabled: false,
-            waitTimeoutMs: 60_000,
-            pollIntervalMs: 3_000,
-          },
           connectors: { slack: { enabled: true } },
         },
         openclawConfig: createConfig(),
@@ -152,11 +147,6 @@ describe("ChatgptAppsMcpBridge", () => {
         config: {
           enabled: true,
           appServer: { command: "codex", args: [] },
-          linking: {
-            enabled: false,
-            waitTimeoutMs: 60_000,
-            pollIntervalMs: 3_000,
-          },
           connectors: { "*": { enabled: true } },
         },
         openclawConfig: createConfig({ "*": { enabled: true } }),
@@ -206,11 +196,6 @@ describe("ChatgptAppsMcpBridge", () => {
         config: {
           enabled: true,
           appServer: { command: "codex", args: [] },
-          linking: {
-            enabled: false,
-            waitTimeoutMs: 60_000,
-            pollIntervalMs: 3_000,
-          },
           connectors: { slack: { enabled: true } },
         },
         openclawConfig: createConfig(),
@@ -259,11 +244,6 @@ describe("ChatgptAppsMcpBridge", () => {
         config: {
           enabled: true,
           appServer: { command: "codex", args: [] },
-          linking: {
-            enabled: false,
-            waitTimeoutMs: 60_000,
-            pollIntervalMs: 3_000,
-          },
           connectors: { "*": { enabled: true } },
         },
         openclawConfig: createConfig({ "*": { enabled: true } }),
@@ -311,11 +291,6 @@ describe("ChatgptAppsMcpBridge", () => {
         config: {
           enabled: true,
           appServer: { command: "codex", args: [] },
-          linking: {
-            enabled: false,
-            waitTimeoutMs: 60_000,
-            pollIntervalMs: 3_000,
-          },
           connectors: { slack: { enabled: true } },
         },
         openclawConfig: createConfig(),
@@ -395,11 +370,6 @@ describe("ChatgptAppsMcpBridge", () => {
         config: {
           enabled: true,
           appServer: { command: "codex", args: [] },
-          linking: {
-            enabled: false,
-            waitTimeoutMs: 60_000,
-            pollIntervalMs: 3_000,
-          },
           connectors: {
             "*": { enabled: true },
             gmail: { enabled: false },

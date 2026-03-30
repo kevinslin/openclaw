@@ -10,11 +10,6 @@ const config: ChatgptAppsConfig = {
     command: "codex",
     args: [],
   },
-  linking: {
-    enabled: false,
-    waitTimeoutMs: 60_000,
-    pollIntervalMs: 3_000,
-  },
   connectors: {
     gmail: { enabled: true },
   },
@@ -214,7 +209,15 @@ describe("invokeViaAppServer", () => {
     });
     expect(startThread).toHaveBeenCalledWith({
       cwd: process.cwd(),
-      approvalPolicy: "never",
+      approvalPolicy: {
+        granular: {
+          sandbox_approval: false,
+          rules: false,
+          skill_approval: false,
+          request_permissions: true,
+          mcp_elicitations: true,
+        },
+      },
       developerInstructions: expect.stringContaining("Use the app mentioned in the user input"),
       ephemeral: false,
       experimentalRawEvents: false,
@@ -224,7 +227,15 @@ describe("invokeViaAppServer", () => {
       expect.objectContaining({
         threadId: "thr_123",
         cwd: process.cwd(),
-        approvalPolicy: "never",
+        approvalPolicy: {
+          granular: {
+            sandbox_approval: false,
+            rules: false,
+            skill_approval: false,
+            request_permissions: true,
+            mcp_elicitations: true,
+          },
+        },
         outputSchema: expect.objectContaining({
           type: "object",
           required: ["status", "result", "error"],

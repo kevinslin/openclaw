@@ -17,19 +17,12 @@ type DerivedAppsConfig = {
 
 export const CHATGPT_APPS_BASE_URL = "https://chatgpt.com";
 const DEFAULT_APP_SERVER_COMMAND = "codex";
-const DEFAULT_LINK_WAIT_TIMEOUT_MS = 60_000;
-const DEFAULT_LINK_POLL_INTERVAL_MS = 3_000;
 
 export type ChatgptAppsConfig = {
   enabled: boolean;
   appServer: {
     command: string;
     args: string[];
-  };
-  linking: {
-    enabled: boolean;
-    waitTimeoutMs: number;
-    pollIntervalMs: number;
   };
   connectors: Record<string, { enabled: boolean }>;
 };
@@ -44,19 +37,6 @@ function normalizeNonEmptyString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed || undefined;
-}
-
-function normalizePositiveInteger(value: unknown, fallback: number): number {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return Math.trunc(value);
-  }
-  if (typeof value === "string") {
-    const parsed = Number.parseInt(value.trim(), 10);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return parsed;
-    }
-  }
-  return fallback;
 }
 
 function normalizeAppServerArgs(value: unknown): string[] {
@@ -93,21 +73,12 @@ export function resolveOpenaiAppsPluginConfig(config: OpenClawConfig): unknown {
 export function resolveChatgptAppsConfig(pluginConfig: unknown): ChatgptAppsConfig {
   const raw = isRecord(pluginConfig) ? pluginConfig : {};
   const appServer = isRecord(raw.appServer) ? raw.appServer : {};
-  const linking = isRecord(raw.linking) ? raw.linking : {};
 
   return {
     enabled: typeof raw.enabled === "boolean" ? raw.enabled : false,
     appServer: {
       command: normalizeNonEmptyString(appServer.command) ?? DEFAULT_APP_SERVER_COMMAND,
       args: normalizeAppServerArgs(appServer.args),
-    },
-    linking: {
-      enabled: typeof linking.enabled === "boolean" ? linking.enabled : false,
-      waitTimeoutMs: normalizePositiveInteger(linking.waitTimeoutMs, DEFAULT_LINK_WAIT_TIMEOUT_MS),
-      pollIntervalMs: normalizePositiveInteger(
-        linking.pollIntervalMs,
-        DEFAULT_LINK_POLL_INTERVAL_MS,
-      ),
     },
     connectors: normalizeConnectors(raw.connectors),
   };

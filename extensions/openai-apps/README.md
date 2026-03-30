@@ -130,8 +130,6 @@ You can combine wildcard enablement with explicit disables:
 - `connectors`: Per-app enablement map. Use explicit connector ids like `gmail`, `linear`, or `google_calendar`.
 - `connectors["*"]`: Enables all accessible ChatGPT apps, with explicit connector entries able to disable individual apps.
 - `appServer.command` / `appServer.args`: Override how the bundle launches `codex app-server`.
-- `linking.enabled`: Enables the auth-link polling flow for apps that require an interactive link step.
-- `linking.waitTimeoutMs` / `linking.pollIntervalMs`: Tune how long the bundle waits for that link flow to complete.
 
 The ChatGPT apps endpoint is internal to the bundle and is not configurable.
 

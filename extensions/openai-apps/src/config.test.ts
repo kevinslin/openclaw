@@ -13,11 +13,6 @@ describe("resolveChatgptAppsConfig", () => {
         command: "codex",
         args: [],
       },
-      linking: {
-        enabled: false,
-        waitTimeoutMs: 60_000,
-        pollIntervalMs: 3_000,
-      },
       connectors: {},
     });
   });
@@ -54,11 +49,6 @@ describe("buildDerivedAppsConfig", () => {
     const derived = buildDerivedAppsConfig({
       enabled: true,
       appServer: { command: "codex", args: [] },
-      linking: {
-        enabled: false,
-        waitTimeoutMs: 60_000,
-        pollIntervalMs: 3_000,
-      },
       connectors: {
         "*": { enabled: true },
         slack: { enabled: false },
@@ -83,11 +73,6 @@ describe("buildDerivedAppsConfig", () => {
     const derived = buildDerivedAppsConfig({
       enabled: true,
       appServer: { command: "codex", args: [] },
-      linking: {
-        enabled: false,
-        waitTimeoutMs: 60_000,
-        pollIntervalMs: 3_000,
-      },
       connectors: {
         gmail: { enabled: true },
       },
