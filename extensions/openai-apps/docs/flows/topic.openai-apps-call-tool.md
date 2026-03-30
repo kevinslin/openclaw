@@ -117,29 +117,29 @@ Ordered call path:
    })
    // clientFactory defaults to CodexAppServerClient.spawn(..., { unhandledServerRequestStrategy: "manual" })
    ```
-3. Initialize the app-server session, subscribe to auth refresh, log in, and rewrite the derived app config in the shared home before starting the turn.
+3. Initialize the app-server session, subscribe to auth refresh, log in, and ensure the derived app config has been written into the shared home for this gateway session before starting the turn.
    ```ts
    // Source: extensions/openai-apps/src/app-server-invoker.ts#L443-L488
    await client.initializeSession()
    unsubscribeRefresh := client.handleChatgptAuthTokensRefresh(async () => refreshedTokens)
    await client.loginAccount(toLoginParams(auth))
-   await client.writeConfigValue({
-     keyPath: "apps",
-     value: buildDerivedAppsConfig(params.config),
-     mergeStrategy: "replace",
-     expectedVersion: null,
+   wroteAppsConfig := await writeDerivedAppsConfig({
+     config: params.config,
+     writeConfigValue: writeParams => client.writeConfigValue(writeParams),
+     appsConfigWriteGate: params.appsConfigWriteGate,
    })
    ```
 
 State transitions / outputs:
 
 - Input: resolved route, projected auth, `appServer.command/args`, runtime env, workspace dir
-- Output: live per-call app-server client pointed at the bundle-owned `statePaths.codexHomeDir`
+- Output: live per-call app-server client pointed at the bundle-owned `statePaths.codexHomeDir`, with the derived `apps` config written at most once per gateway session for the active config hash
 
 Branch points:
 
 - Auth failures abort the call before client spawn.
 - Command resolution can return a discovered executable path or the raw configured command.
+- `writeDerivedAppsConfig(...)` writes on the first tool call in a gateway session and reuses the existing shared-home config on later calls unless the resolved plugin config hash changes.
 
 External boundaries:
 

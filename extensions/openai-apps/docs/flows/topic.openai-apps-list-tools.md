@@ -137,7 +137,11 @@ Ordered call path:
      await client.initializeSession()
      unsubscribe := client.handleChatgptAuthTokensRefresh(async () => refreshedTokens)
      await client.loginAccount(toLoginParams(auth))
-     await client.writeConfigValue({ keyPath: "apps", value: buildDerivedAppsConfig(params.config), mergeStrategy: "replace", expectedVersion: null })
+     await writeDerivedAppsConfig({
+       config: params.config,
+       writeConfigValue: writeParams => client.writeConfigValue(writeParams),
+       appsConfigWriteGate: params.appsConfigWriteGate,
+     })
      do
        response := await client.listApps({ cursor: appCursor, forceRefetch: true })
        apps.push(...response.data)
@@ -178,7 +182,7 @@ Branch points:
 External boundaries:
 
 - OpenAI Codex OAuth refresh through `refreshOpenAICodexToken(...)`
-- App-server RPCs: `initializeSession`, `loginAccount`, `writeConfigValue`, `listApps`, `readAccount`, `getAuthStatus`
+- App-server RPCs: `initializeSession`, `loginAccount`, `writeConfigValue` (first use per gateway session / config hash), `listApps`, `readAccount`, `getAuthStatus`
 - Snapshot and debug files under the bundle runtime state directory
 
 ### Phase 3: Build the published tool cache

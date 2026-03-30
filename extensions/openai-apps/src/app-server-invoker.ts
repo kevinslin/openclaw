@@ -7,9 +7,13 @@ import {
   type ServerRequestContext,
   type protocol,
 } from "codex-app-server-sdk";
+import {
+  writeDerivedAppsConfig,
+  type AppServerAppsConfigWriteGate,
+} from "./app-server-apps-config.js";
 import { resolveAppServerCommand } from "./app-server-command.js";
 import type { ChatgptAppsResolvedAuth } from "./auth-projector.js";
-import { buildDerivedAppsConfig, type ChatgptAppsConfig } from "./config.js";
+import type { ChatgptAppsConfig } from "./config.js";
 import type { ChatgptAppsStatePaths } from "./state-paths.js";
 
 type ConfigValueWriteParams = protocol.v2.ConfigValueWriteParams;
@@ -26,7 +30,7 @@ type ThreadStartParams = protocol.v2.ThreadStartParams;
 type TurnStartParams = protocol.v2.TurnStartParams;
 type UserInput = protocol.v2.UserInput;
 
-const TURN_TIMEOUT_MS = 180_000;
+const DEFAULT_TURN_TIMEOUT_MS = 180_000;
 const APP_INVOCATION_APPROVAL_POLICY: NonNullable<ThreadStartParams["approvalPolicy"]> = {
   granular: {
     sandbox_approval: false,
@@ -73,6 +77,20 @@ function serializeDebugValue(value: unknown): string {
   } catch {
     return JSON.stringify(String(value));
   }
+}
+
+function resolveTurnTimeoutMs(env: NodeJS.ProcessEnv | undefined): number {
+  const rawValue = env?.OPENCLAW_OPENAI_APPS_TURN_TIMEOUT_MS?.trim();
+  if (!rawValue) {
+    return DEFAULT_TURN_TIMEOUT_MS;
+  }
+
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_TURN_TIMEOUT_MS;
+  }
+
+  return Math.floor(parsed);
 }
 
 function writeDebugLog(
@@ -164,6 +182,7 @@ export type AppServerToolInvoker = (params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   resolveProjectedAuth: ProjectedAuthResolver;
+  appsConfigWriteGate?: AppServerAppsConfigWriteGate;
   clientFactory?: (params: {
     command: string;
     args: string[];
@@ -366,6 +385,7 @@ function buildUnsupportedServerRequestError(message: string | null | undefined):
 
 export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
   const env = params.env ?? process.env;
+  const turnTimeoutMs = resolveTurnTimeoutMs(env);
   writeDebugLog(
     env,
     `invoke start connector=${params.route.connectorId} published=${params.route.publishedName}`,
@@ -478,14 +498,17 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
     writeDebugLog(env, "app-server login start", params.statePaths.rootDir);
     await client.loginAccount(toLoginParams(auth));
     writeDebugLog(env, "app-server login done", params.statePaths.rootDir);
-    writeDebugLog(env, "app-server config write start", params.statePaths.rootDir);
-    await client.writeConfigValue({
-      keyPath: "apps",
-      value: buildDerivedAppsConfig(params.config),
-      mergeStrategy: "replace",
-      expectedVersion: null,
+    writeDebugLog(env, "app-server config ensure start", params.statePaths.rootDir);
+    const wroteAppsConfig = await writeDerivedAppsConfig({
+      config: params.config,
+      writeConfigValue: (writeParams) => client.writeConfigValue(writeParams),
+      appsConfigWriteGate: params.appsConfigWriteGate,
     });
-    writeDebugLog(env, "app-server config write done", params.statePaths.rootDir);
+    writeDebugLog(
+      env,
+      wroteAppsConfig ? "app-server config ensure wrote" : "app-server config ensure reused",
+      params.statePaths.rootDir,
+    );
 
     let serverRequestError: Error | null = null;
     const handledServerRequests = new Set<string>([
@@ -604,7 +627,7 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
         outputSchema: CONNECTOR_OUTPUT_SCHEMA as unknown as TurnStartParams["outputSchema"],
         input: invocationInput,
       },
-      { timeoutMs: TURN_TIMEOUT_MS },
+      { timeoutMs: turnTimeoutMs },
     );
     writeDebugLog(
       env,

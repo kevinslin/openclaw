@@ -1,5 +1,6 @@
 import type { protocol } from "codex-app-server-sdk";
 import { describe, expect, it } from "vitest";
+import { createAppServerAppsConfigWriteGate } from "./app-server-apps-config.js";
 import { callAppServerMethod, captureAppServerSnapshot } from "./app-server-session.js";
 import type { ChatgptAppsConfig } from "./config.js";
 import type { ChatgptAppsStatePaths } from "./state-paths.js";
@@ -244,5 +245,117 @@ describe("app-server session helpers", () => {
     ).rejects.toThrow("app list unavailable");
 
     expect(closeCalls).toEqual(["closed"]);
+  });
+
+  it("reuses the shared apps config write across snapshot refresh and subsequent method calls", async () => {
+    const appsConfigWriteGate = createAppServerAppsConfigWriteGate();
+    const events: string[] = [];
+
+    await captureAppServerSnapshot({
+      config,
+      statePaths,
+      appsConfigWriteGate,
+      resolveProjectedAuth: async () => ({
+        status: "ok",
+        accessToken: "access-token",
+        accountId: "acct_123",
+        planType: null,
+        profileId: "openai-codex:default",
+        identity: { email: "user@example.com", profileName: "user@example.com" },
+      }),
+      clientFactory: async () => ({
+        initializeSession: async () => {
+          events.push("snapshot:initializeSession");
+        },
+        handleChatgptAuthTokensRefresh: () => () => {},
+        request: async () => null,
+        loginAccount: async (): Promise<LoginAccountResponse> => {
+          events.push("snapshot:loginAccount");
+          return { type: "chatgptAuthTokens" };
+        },
+        readAccount: async (): Promise<GetAccountResponse> => ({
+          account: null,
+          requiresOpenaiAuth: false,
+        }),
+        getAuthStatus: async (): Promise<GetAuthStatusResponse> => ({
+          authMethod: "chatgpt",
+          authToken: null,
+          requiresOpenaiAuth: false,
+        }),
+        listApps: async () => ({
+          data: [],
+          nextCursor: null,
+        }),
+        writeConfigValue: async (): Promise<ConfigWriteResponse> => {
+          events.push("snapshot:writeConfigValue");
+          return {
+            status: "ok",
+            version: "1",
+            filePath: "/tmp/openclaw-chatgpt-apps/config.toml",
+            overriddenMetadata: null,
+          };
+        },
+        close: async () => {
+          events.push("snapshot:close");
+        },
+      }),
+    });
+
+    await callAppServerMethod({
+      config,
+      statePaths,
+      method: "app/list",
+      appsConfigWriteGate,
+      resolveProjectedAuth: async () => ({
+        status: "ok",
+        accessToken: "access-token",
+        accountId: "acct_123",
+        planType: null,
+        profileId: "openai-codex:default",
+        identity: { email: "user@example.com", profileName: "user@example.com" },
+      }),
+      clientFactory: async () => ({
+        initializeSession: async () => {
+          events.push("method:initializeSession");
+        },
+        handleChatgptAuthTokensRefresh: () => () => {},
+        request: async () => {
+          events.push("method:request");
+          return { data: [], nextCursor: null };
+        },
+        loginAccount: async (): Promise<LoginAccountResponse> => {
+          events.push("method:loginAccount");
+          return { type: "chatgptAuthTokens" };
+        },
+        readAccount: async (): Promise<GetAccountResponse> => ({
+          account: null,
+          requiresOpenaiAuth: false,
+        }),
+        getAuthStatus: async (): Promise<GetAuthStatusResponse> => ({
+          authMethod: "chatgpt",
+          authToken: null,
+          requiresOpenaiAuth: false,
+        }),
+        listApps: async () => ({
+          data: [],
+          nextCursor: null,
+        }),
+        writeConfigValue: async (): Promise<ConfigWriteResponse> => {
+          events.push("method:writeConfigValue");
+          return {
+            status: "ok",
+            version: "1",
+            filePath: "/tmp/openclaw-chatgpt-apps/config.toml",
+            overriddenMetadata: null,
+          };
+        },
+        close: async () => {
+          events.push("method:close");
+        },
+      }),
+    });
+
+    expect(events).toContain("snapshot:writeConfigValue");
+    expect(events).not.toContain("method:writeConfigValue");
   });
 });

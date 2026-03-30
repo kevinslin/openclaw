@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { AppServerAppsConfigWriteGate } from "./app-server-apps-config.js";
 import { captureAppServerSnapshot, type AppServerRefreshCapture } from "./app-server-session.js";
 import type { ChatgptAppsResolvedAuth } from "./auth-projector.js";
 import { resolveChatgptAppsProjectedAuth } from "./auth-projector.js";
@@ -51,10 +52,12 @@ export async function ensureFreshSnapshot(params: {
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
     resolveProjectedAuth: () => Promise<ChatgptAppsResolvedAuth>;
+    appsConfigWriteGate?: AppServerAppsConfigWriteGate;
     now?: () => number;
   }) => Promise<AppServerRefreshCapture>;
   statePaths?: ChatgptAppsStatePaths;
   refreshTimeoutMs?: number;
+  appsConfigWriteGate?: AppServerAppsConfigWriteGate;
 }): Promise<EnsureFreshSnapshotResult> {
   const env = params.env ?? process.env;
   const now = params.now ?? Date.now;
@@ -155,6 +158,7 @@ export async function ensureFreshSnapshot(params: {
             config: openclawConfig,
             agentDir: env.OPENCLAW_AGENT_DIR,
           }),
+        appsConfigWriteGate: captureParams.appsConfigWriteGate,
         now,
       }));
 
@@ -170,6 +174,7 @@ export async function ensureFreshSnapshot(params: {
             config: openclawConfig,
             agentDir: env.OPENCLAW_AGENT_DIR,
           }),
+        appsConfigWriteGate: params.appsConfigWriteGate,
         now,
       }),
       new Promise<AppServerRefreshCapture>((_, reject) => {

@@ -337,6 +337,66 @@ describe("ChatgptAppsMcpBridge", () => {
     }
   });
 
+  it("shares the same apps config write gate across refresh and tool invocation", async () => {
+    const stateDir = await createStateDir();
+    const snapshot = createPersistedSnapshot();
+    await writeSnapshot(stateDir, snapshot);
+
+    let refreshGate: unknown = null;
+    let invokeGate: unknown = null;
+    const bridge = new ChatgptAppsMcpBridge({
+      loadOpenClawConfig: () => createConfig(),
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+      ensureFreshSnapshot: async (params) => {
+        refreshGate = params.appsConfigWriteGate;
+        return {
+          status: "ok",
+          source: "cache",
+          snapshot,
+          config: {
+            enabled: true,
+            appServer: { command: "codex", args: [] },
+            connectors: { slack: { enabled: true } },
+          },
+          openclawConfig: createConfig(),
+          statePaths: resolveChatgptAppsStatePaths({
+            OPENCLAW_STATE_DIR: stateDir,
+            HOME: os.tmpdir(),
+          }),
+        };
+      },
+      resolveProjectedAuth: async () => ({
+        status: "ok",
+        accessToken: "access-token",
+        accountId: "acct_123",
+        planType: null,
+        profileId: "openai-codex:default",
+        identity: { email: "user@example.com", profileName: "user@example.com" },
+      }),
+      appServerInvoker: vi.fn(async (params) => {
+        invokeGate = params.appsConfigWriteGate;
+        return {
+          content: [{ type: "text" as const, text: "ok" }],
+        };
+      }),
+    });
+
+    try {
+      await bridge.listTools();
+      await bridge.callTool("chatgpt_app_slack", {
+        request: "Send a launch update to #team",
+      });
+
+      expect(refreshGate).toBeTruthy();
+      expect(invokeGate).toBe(refreshGate);
+    } finally {
+      await bridge.close();
+    }
+  });
+
   it("honors wildcard enablement with explicit disables", async () => {
     const stateDir = await createStateDir();
     const snapshot = createPersistedSnapshot();

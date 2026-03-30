@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { protocol } from "codex-app-server-sdk";
 import { describe, expect, it, vi } from "vitest";
+import { createAppServerAppsConfigWriteGate } from "./app-server-apps-config.js";
 import { invokeViaAppServer, type AppServerInvocationClient } from "./app-server-invoker.js";
 import { buildDerivedAppsConfig, type ChatgptAppsConfig } from "./config.js";
 import type { ChatgptAppsStatePaths } from "./state-paths.js";
@@ -343,6 +344,109 @@ describe("invokeViaAppServer", () => {
     } finally {
       await rm(tempStatePaths.rootDir, { recursive: true, force: true });
     }
+  });
+
+  it("uses OPENCLAW_OPENAI_APPS_TURN_TIMEOUT_MS when it is a positive integer", async () => {
+    const runTurn = vi.fn<AppServerInvocationClient["runTurn"]>(async () => ({
+      start: {
+        turn: {
+          id: "turn_123",
+          items: [],
+          status: "inProgress",
+          error: null,
+        },
+      },
+      completed: {
+        threadId: "thr_123",
+        turn: {
+          id: "turn_123",
+          items: [],
+          status: "completed",
+          error: null,
+        },
+      },
+    }));
+
+    await expect(
+      invokeViaAppServer({
+        config,
+        route: {
+          connectorId: "gmail",
+          appId: "asdk_app_gmail",
+          publishedName: "chatgpt_app_gmail",
+          appName: "Gmail",
+          appInvocationToken: "gmail",
+        },
+        args: { request: "Summarize my recent emails" },
+        statePaths,
+        env: {
+          ...process.env,
+          OPENCLAW_OPENAI_APPS_TURN_TIMEOUT_MS: "600000",
+        },
+        resolveProjectedAuth: async () => ({
+          status: "ok",
+          accessToken: "access-token",
+          accountId: "acct_123",
+          planType: null,
+          profileId: "openai-codex:default",
+          identity: { email: "user@example.com", profileName: "user@example.com" },
+        }),
+        clientFactory: async () => createMockClient({ runTurn }),
+      }),
+    ).resolves.toEqual({
+      content: [{ type: "text", text: "ok" }],
+    });
+
+    expect(runTurn).toHaveBeenCalledWith(expect.anything(), { timeoutMs: 600_000 });
+  });
+
+  it("writes the derived apps config only once across repeated invocations in the same gateway session", async () => {
+    const appsConfigWriteGate = createAppServerAppsConfigWriteGate();
+    const writeConfigValue = vi.fn<AppServerInvocationClient["writeConfigValue"]>(async () => ({
+      status: "ok",
+      version: "1",
+      filePath: "/tmp/openai-apps/config.toml",
+      overriddenMetadata: null,
+    }));
+
+    const runInvocation = async (request: string) =>
+      await invokeViaAppServer({
+        config,
+        route: {
+          connectorId: "gmail",
+          appId: "asdk_app_gmail",
+          publishedName: "chatgpt_app_gmail",
+          appName: "Gmail",
+          appInvocationToken: "gmail",
+        },
+        args: { request },
+        statePaths,
+        resolveProjectedAuth: async () => ({
+          status: "ok",
+          accessToken: "access-token",
+          accountId: "acct_123",
+          planType: null,
+          profileId: "openai-codex:default",
+          identity: { email: "user@example.com", profileName: "user@example.com" },
+        }),
+        appsConfigWriteGate,
+        clientFactory: async () => createMockClient({ writeConfigValue }),
+      });
+
+    await expect(runInvocation("Summarize my recent emails")).resolves.toEqual({
+      content: [{ type: "text", text: "ok" }],
+    });
+    await expect(runInvocation("Summarize my starred emails")).resolves.toEqual({
+      content: [{ type: "text", text: "ok" }],
+    });
+
+    expect(writeConfigValue).toHaveBeenCalledTimes(1);
+    expect(writeConfigValue).toHaveBeenCalledWith({
+      keyPath: "apps",
+      value: buildDerivedAppsConfig(config),
+      mergeStrategy: "replace",
+      expectedVersion: null,
+    });
   });
 
   // TODO: doesn't work

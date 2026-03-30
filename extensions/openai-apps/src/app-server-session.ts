@@ -1,9 +1,12 @@
 import { mkdir } from "node:fs/promises";
 import { CodexAppServerClient, type protocol } from "codex-app-server-sdk";
+import {
+  writeDerivedAppsConfig,
+  type AppServerAppsConfigWriteGate,
+} from "./app-server-apps-config.js";
 import { resolveAppServerCommand } from "./app-server-command.js";
 import type { ChatgptAppsResolvedAuth } from "./auth-projector.js";
 import type { ChatgptAppsConfig } from "./config.js";
-import { buildDerivedAppsConfig } from "./config.js";
 import type { ChatgptAppsStatePaths } from "./state-paths.js";
 
 type GetAuthStatusResponse = protocol.GetAuthStatusResponse;
@@ -59,6 +62,7 @@ type AppServerSessionParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   resolveProjectedAuth: ProjectedAuthResolver;
+  appsConfigWriteGate?: AppServerAppsConfigWriteGate;
   clientFactory?: (params: {
     command: string;
     args: string[];
@@ -162,11 +166,10 @@ async function withLoggedInAppServerSession<TResult>(
     });
 
     await client.loginAccount(toLoginParams(auth));
-    await client.writeConfigValue({
-      keyPath: "apps",
-      value: buildDerivedAppsConfig(params.config),
-      mergeStrategy: "replace",
-      expectedVersion: null,
+    await writeDerivedAppsConfig({
+      config: params.config,
+      writeConfigValue: (writeParams) => client.writeConfigValue(writeParams),
+      appsConfigWriteGate: params.appsConfigWriteGate,
     });
 
     return await handler({ auth, client });

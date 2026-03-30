@@ -9,6 +9,10 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
+  createAppServerAppsConfigWriteGate,
+  type AppServerAppsConfigWriteGate,
+} from "./app-server-apps-config.js";
+import {
   invokeViaAppServer,
   type AppServerInvocationRoute,
   type AppServerToolInvoker,
@@ -169,6 +173,7 @@ export class ChatgptAppsMcpBridge {
   private readonly ensureFreshSnapshot;
   private readonly resolveProjectedAuth;
   private readonly appServerInvoker: AppServerToolInvoker;
+  private readonly appsConfigWriteGate: AppServerAppsConfigWriteGate;
   private hardRefreshRequested: boolean;
   private toolCache: BridgeToolCache | null = null;
   private toolCachePromise: Promise<BridgeToolCache> | null = null;
@@ -189,6 +194,7 @@ export class ChatgptAppsMcpBridge {
     this.ensureFreshSnapshot = params.ensureFreshSnapshot ?? ensureFreshSnapshot;
     this.resolveProjectedAuth = params.resolveProjectedAuth ?? resolveChatgptAppsProjectedAuth;
     this.appServerInvoker = params.appServerInvoker ?? invokeViaAppServer;
+    this.appsConfigWriteGate = createAppServerAppsConfigWriteGate();
 
     this.server = new Server(
       {
@@ -251,6 +257,7 @@ export class ChatgptAppsMcpBridge {
       statePaths: resolveChatgptAppsStatePaths(this.env),
       workspaceDir: this.workspaceDir,
       env: this.env,
+      appsConfigWriteGate: this.appsConfigWriteGate,
       resolveProjectedAuth: async () =>
         await this.resolveProjectedAuth({
           config: this.loadOpenClawConfig(),
@@ -271,6 +278,7 @@ export class ChatgptAppsMcpBridge {
       env: this.env,
       workspaceDir: this.workspaceDir,
       hardRefresh: this.consumeHardRefresh(),
+      appsConfigWriteGate: this.appsConfigWriteGate,
     });
     if (refreshResult.status !== "ok") {
       throw new Error(refreshResult.message);
