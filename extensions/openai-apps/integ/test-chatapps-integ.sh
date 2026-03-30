@@ -50,6 +50,7 @@ TRANSCRIPT_READER="/Users/kevinlin/code/kl-oai-skills/claw-conn-debug/scripts/re
 INTEG_PROFILE="chatapps-integ"
 INTEG_STATE_DIR="${HOME}/.openclaw-${INTEG_PROFILE}"
 INTEG_CONFIG_PATH="${INTEG_STATE_DIR}/openclaw.json"
+INTEG_WORKSPACE_DIR="${INTEG_STATE_DIR}/workspace"
 INTEG_AGENT_ID="${INTEG_PROFILE}"
 INTEG_AGENT_DIR="${INTEG_STATE_DIR}/agents/${INTEG_AGENT_ID}/agent"
 INTEG_MAIN_AGENT_DIR="${INTEG_STATE_DIR}/agents/main/agent"
@@ -65,6 +66,7 @@ INTEG_ENV=(
   OPENCLAW_PROFILE="$INTEG_PROFILE"
   OPENCLAW_STATE_DIR="$INTEG_STATE_DIR"
   OPENCLAW_CONFIG_PATH="$INTEG_CONFIG_PATH"
+  OPENCLAW_WORKSPACE_DIR="$INTEG_WORKSPACE_DIR"
   OPENCLAW_AGENT_DIR="$INTEG_AGENT_DIR"
   OPENCLAW_GATEWAY_PORT="$GATEWAY_PORT"
 )
@@ -313,6 +315,7 @@ PY
 ensure_integration_profile_config() {
   mkdir -p \
     "$INTEG_STATE_DIR" \
+    "$INTEG_WORKSPACE_DIR" \
     "$INTEG_AGENT_DIR" \
     "${INTEG_STATE_DIR}/agents/${INTEG_AGENT_ID}/sessions" \
     "$INTEG_MAIN_AGENT_DIR" \
@@ -382,6 +385,51 @@ if not isinstance(wildcard, dict):
     connectors["*"] = wildcard
 wildcard["enabled"] = True
 
+plugins_slots = plugins.setdefault("slots", {})
+if not isinstance(plugins_slots, dict):
+    plugins_slots = {}
+    plugins["slots"] = plugins_slots
+plugins_slots["memory"] = "none"
+
+agents = raw.setdefault("agents", {})
+if not isinstance(agents, dict):
+    agents = {}
+    raw["agents"] = agents
+
+defaults = agents.setdefault("defaults", {})
+if not isinstance(defaults, dict):
+    defaults = {}
+    agents["defaults"] = defaults
+defaults["workspace"] = str(config_path.parent / "workspace")
+defaults["skipBootstrap"] = True
+
+memory_search = defaults.setdefault("memorySearch", {})
+if not isinstance(memory_search, dict):
+    memory_search = {}
+    defaults["memorySearch"] = memory_search
+memory_search["enabled"] = False
+
+hooks = raw.setdefault("hooks", {})
+if not isinstance(hooks, dict):
+    hooks = {}
+    raw["hooks"] = hooks
+
+internal_hooks = hooks.setdefault("internal", {})
+if not isinstance(internal_hooks, dict):
+    internal_hooks = {}
+    hooks["internal"] = internal_hooks
+
+hook_entries = internal_hooks.setdefault("entries", {})
+if not isinstance(hook_entries, dict):
+    hook_entries = {}
+    internal_hooks["entries"] = hook_entries
+
+session_memory = hook_entries.setdefault("session-memory", {})
+if not isinstance(session_memory, dict):
+    session_memory = {}
+    hook_entries["session-memory"] = session_memory
+session_memory["enabled"] = False
+
 config_path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
 PY
 }
@@ -417,6 +465,8 @@ ensure_integration_profile_openai_auth() {
 }
 
 prepare_integration_profile() {
+  rm -rf "$INTEG_WORKSPACE_DIR"
+  mkdir -p "$INTEG_WORKSPACE_DIR"
   ensure_integration_profile_config
   ensure_integration_profile_openai_auth
 

@@ -183,6 +183,46 @@ Mode coverage:
 The wrapper delegates to the `openai-apps` integration harness and writes
 artifacts under `/tmp/claw-chat-apps/`.
 
+### Harness Setup
+
+The live harness is intentionally isolated from your normal OpenClaw profile.
+It always runs under the dedicated profile `chatapps-integ` with state rooted
+at `~/.openclaw-chatapps-integ/`.
+
+Setup details:
+
+- The harness creates or rewrites the `chatapps-integ` config before each run.
+- It uses a dedicated workspace at `~/.openclaw-chatapps-integ/workspace`.
+- That workspace is deleted and recreated for each run.
+- The profile forces `plugins.slots.memory = "none"`.
+- The profile disables `agents.defaults.memorySearch`.
+- The profile disables the internal `session-memory` hook.
+- The profile sets `agents.defaults.skipBootstrap = true` so the workspace stays empty instead of being seeded with bootstrap files like `SOUL.md`, `USER.md`, or `BOOTSTRAP.md`.
+
+This isolation matters because the connector smoke tests should exercise the
+ChatGPT app invocation path, not whatever memory files or bootstrap context may
+exist in a developer's normal workspace.
+
+### Auth Requirements
+
+The harness expects reusable `openai-codex` OAuth state to already exist in at
+least one local OpenClaw profile. Before running the live suite:
+
+```bash
+openclaw models auth login --provider openai-codex
+```
+
+The harness will copy that login state into the `chatapps-integ` profile when
+possible. If no reusable login is found, the run fails fast with an auth setup
+error.
+
+### Useful Notes
+
+- Override the gateway port with `OPENCLAW_GATEWAY_PORT=<port>` if needed.
+- The harness starts a fresh dev gateway and TUI session for each live run.
+- The final artifacts include per-leg summaries plus a Showboat demo doc under
+  `/tmp/claw-chat-apps/`.
+
 ## Appendix
 
 ### Calls to App Server
