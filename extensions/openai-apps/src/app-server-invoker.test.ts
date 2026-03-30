@@ -10,6 +10,7 @@ import type { ChatgptAppsStatePaths } from "./state-paths.js";
 
 const config: ChatgptAppsConfig = {
   enabled: true,
+  allowDestructiveActions: "always",
   appServer: {
     command: "codex",
     args: [],
@@ -526,6 +527,281 @@ describe("invokeViaAppServer", () => {
           profileId: "openai-codex:default",
           identity: { email: "user@example.com", profileName: "user@example.com" },
         }),
+        clientFactory: async () => client,
+      }),
+    ).resolves.toEqual({
+      content: [{ type: "text", text: "ok" }],
+    });
+  });
+
+  it("accepts destructive app elicitations when configured to always allow them", async () => {
+    let elicitationHandler: ((context: unknown) => Promise<unknown> | unknown) | undefined;
+    const client = createMockClient({
+      handleServerRequest: (method, handler) => {
+        if (method === "mcpServer/elicitation/request") {
+          elicitationHandler = handler as (context: unknown) => Promise<unknown> | unknown;
+        }
+        return () => {};
+      },
+      runTurn: async () => {
+        const response = await elicitationHandler?.({
+          request: {
+            params: {
+              threadId: "thr_123",
+              turnId: "turn_123",
+              serverName: "gmail",
+              mode: "form",
+              message: "Confirm destructive action.",
+              requestedSchema: {
+                type: "object",
+                properties: {},
+              },
+              _meta: {
+                codex_approval_kind: "mcp_tool_call",
+                connector_name: "Gmail",
+                tool_title: "send_email",
+                tool_params: {
+                  to: "user@example.com",
+                },
+              },
+            },
+          },
+        });
+        expect(response).toEqual({
+          action: "accept",
+          content: {},
+          _meta: null,
+        });
+        return {
+          start: {
+            turn: {
+              id: "turn_123",
+              items: [],
+              status: "inProgress",
+              error: null,
+            },
+          },
+          completed: {
+            threadId: "thr_123",
+            turn: {
+              id: "turn_123",
+              items: [],
+              status: "completed",
+              error: null,
+            },
+          },
+        };
+      },
+    });
+
+    await expect(
+      invokeViaAppServer({
+        config: {
+          ...config,
+          allowDestructiveActions: "always",
+        },
+        route: {
+          connectorId: "gmail",
+          appId: "asdk_app_gmail",
+          publishedName: "chatgpt_app_gmail",
+          appName: "Gmail",
+          appInvocationToken: "gmail",
+        },
+        args: { request: "Send the email" },
+        statePaths,
+        resolveProjectedAuth: async () => ({
+          status: "ok",
+          accessToken: "access-token",
+          accountId: "acct_123",
+          planType: null,
+          profileId: "openai-codex:default",
+          identity: { email: "user@example.com", profileName: "user@example.com" },
+        }),
+        clientFactory: async () => client,
+      }),
+    ).resolves.toEqual({
+      content: [{ type: "text", text: "ok" }],
+    });
+  });
+
+  it("declines destructive app elicitations when configured to never allow them", async () => {
+    let elicitationHandler: ((context: unknown) => Promise<unknown> | unknown) | undefined;
+    const client = createMockClient({
+      handleServerRequest: (method, handler) => {
+        if (method === "mcpServer/elicitation/request") {
+          elicitationHandler = handler as (context: unknown) => Promise<unknown> | unknown;
+        }
+        return () => {};
+      },
+      runTurn: async () => {
+        const response = await elicitationHandler?.({
+          request: {
+            params: {
+              threadId: "thr_123",
+              turnId: "turn_123",
+              serverName: "google_calendar",
+              mode: "form",
+              message: "Confirm event creation.",
+              requestedSchema: {
+                type: "object",
+                properties: {},
+              },
+              _meta: {
+                codex_approval_kind: "mcp_tool_call",
+                connector_name: "Google Calendar",
+                tool_title: "create_event",
+              },
+            },
+          },
+        });
+        expect(response).toEqual({
+          action: "decline",
+          content: null,
+          _meta: null,
+        });
+        return {
+          start: {
+            turn: {
+              id: "turn_123",
+              items: [],
+              status: "inProgress",
+              error: null,
+            },
+          },
+          completed: {
+            threadId: "thr_123",
+            turn: {
+              id: "turn_123",
+              items: [],
+              status: "completed",
+              error: null,
+            },
+          },
+        };
+      },
+    });
+
+    await expect(
+      invokeViaAppServer({
+        config: {
+          ...config,
+          allowDestructiveActions: "never",
+        },
+        route: {
+          connectorId: "google_calendar",
+          appId: "asdk_app_google_calendar",
+          publishedName: "chatgpt_app_google_calendar",
+          appName: "Google Calendar",
+          appInvocationToken: "google_calendar",
+        },
+        args: { request: "Create the event" },
+        statePaths,
+        resolveProjectedAuth: async () => ({
+          status: "ok",
+          accessToken: "access-token",
+          accountId: "acct_123",
+          planType: null,
+          profileId: "openai-codex:default",
+          identity: { email: "user@example.com", profileName: "user@example.com" },
+        }),
+        clientFactory: async () => client,
+      }),
+    ).resolves.toEqual({
+      content: [{ type: "text", text: "ok" }],
+    });
+  });
+
+  it("delegates destructive app elicitations to the provided handler when configured for on-request", async () => {
+    let elicitationHandler: ((context: unknown) => Promise<unknown> | unknown) | undefined;
+    const outerElicitationHandler = vi.fn(async () => ({
+      action: "accept" as const,
+      content: {},
+      _meta: null,
+    }));
+    const client = createMockClient({
+      handleServerRequest: (method, handler) => {
+        if (method === "mcpServer/elicitation/request") {
+          elicitationHandler = handler as (context: unknown) => Promise<unknown> | unknown;
+        }
+        return () => {};
+      },
+      runTurn: async () => {
+        const requestParams = {
+          threadId: "thr_123",
+          turnId: "turn_123",
+          serverName: "google_calendar",
+          mode: "form" as const,
+          message: "Confirm event creation.",
+          requestedSchema: {
+            type: "object" as const,
+            properties: {},
+          },
+          _meta: {
+            codex_approval_kind: "mcp_tool_call",
+            connector_name: "Google Calendar",
+            tool_title: "create_event",
+            tool_params: {
+              title: "test-123",
+            },
+          },
+        };
+        const response = await elicitationHandler?.({
+          request: {
+            params: requestParams,
+          },
+        });
+        expect(response).toEqual({
+          action: "accept",
+          content: {},
+          _meta: null,
+        });
+        expect(outerElicitationHandler).toHaveBeenCalledWith(requestParams);
+        return {
+          start: {
+            turn: {
+              id: "turn_123",
+              items: [],
+              status: "inProgress",
+              error: null,
+            },
+          },
+          completed: {
+            threadId: "thr_123",
+            turn: {
+              id: "turn_123",
+              items: [],
+              status: "completed",
+              error: null,
+            },
+          },
+        };
+      },
+    });
+
+    await expect(
+      invokeViaAppServer({
+        config: {
+          ...config,
+          allowDestructiveActions: "on-request",
+        },
+        route: {
+          connectorId: "google_calendar",
+          appId: "asdk_app_google_calendar",
+          publishedName: "chatgpt_app_google_calendar",
+          appName: "Google Calendar",
+          appInvocationToken: "google_calendar",
+        },
+        args: { request: "Create the event" },
+        statePaths,
+        resolveProjectedAuth: async () => ({
+          status: "ok",
+          accessToken: "access-token",
+          accountId: "acct_123",
+          planType: null,
+          profileId: "openai-codex:default",
+          identity: { email: "user@example.com", profileName: "user@example.com" },
+        }),
+        handleMcpServerElicitation: outerElicitationHandler,
         clientFactory: async () => client,
       }),
     ).resolves.toEqual({

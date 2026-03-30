@@ -17,9 +17,13 @@ type DerivedAppsConfig = {
 
 export const CHATGPT_APPS_BASE_URL = "https://chatgpt.com";
 const DEFAULT_APP_SERVER_COMMAND = "codex";
+const DEFAULT_ALLOW_DESTRUCTIVE_ACTIONS = "never";
+
+export type AllowDestructiveActionsMode = "always" | "on-request" | "never";
 
 export type ChatgptAppsConfig = {
   enabled: boolean;
+  allowDestructiveActions: AllowDestructiveActionsMode;
   appServer: {
     command: string;
     args: string[];
@@ -49,6 +53,13 @@ function normalizeAppServerArgs(value: unknown): string[] {
     .filter((entry) => entry !== "app-server" && entry !== "--analytics-default-enabled");
 }
 
+function normalizeAllowDestructiveActions(value: unknown): AllowDestructiveActionsMode {
+  if (value === "always" || value === "on-request" || value === "never") {
+    return value;
+  }
+  return DEFAULT_ALLOW_DESTRUCTIVE_ACTIONS;
+}
+
 function normalizeConnectors(value: unknown): ChatgptAppsConfig["connectors"] {
   if (!isRecord(value)) {
     return {};
@@ -76,6 +87,7 @@ export function resolveChatgptAppsConfig(pluginConfig: unknown): ChatgptAppsConf
 
   return {
     enabled: typeof raw.enabled === "boolean" ? raw.enabled : false,
+    allowDestructiveActions: normalizeAllowDestructiveActions(raw.allow_destructive_actions),
     appServer: {
       command: normalizeNonEmptyString(appServer.command) ?? DEFAULT_APP_SERVER_COMMAND,
       args: normalizeAppServerArgs(appServer.args),
@@ -87,6 +99,7 @@ export function resolveChatgptAppsConfig(pluginConfig: unknown): ChatgptAppsConf
 export function buildDerivedAppsConfig(config: ChatgptAppsConfig): DerivedAppsConfig {
   const apps: Record<string, DerivedAppConfig> = {};
   const wildcardEnabled = config.connectors["*"]?.enabled ?? false;
+  const destructiveEnabled = config.allowDestructiveActions !== "never";
 
   for (const [connectorId, connector] of Object.entries(config.connectors)) {
     if (connectorId === "*") {
@@ -97,7 +110,7 @@ export function buildDerivedAppsConfig(config: ChatgptAppsConfig): DerivedAppsCo
       // The app-server persists this structure via TOML-backed config writes.
       // Omit optional null-valued keys so the sidecar never attempts to encode
       // JSON null into a TOML value.
-      destructive_enabled: true,
+      destructive_enabled: destructiveEnabled,
       open_world_enabled: true,
     };
   }
@@ -105,7 +118,7 @@ export function buildDerivedAppsConfig(config: ChatgptAppsConfig): DerivedAppsCo
   return {
     _default: {
       enabled: wildcardEnabled,
-      destructive_enabled: true,
+      destructive_enabled: destructiveEnabled,
       open_world_enabled: true,
     },
     ...apps,

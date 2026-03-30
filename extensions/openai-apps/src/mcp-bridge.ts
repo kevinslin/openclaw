@@ -5,8 +5,10 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
   type CallToolResult,
+  type ElicitRequestFormParams,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
+import type { protocol } from "codex-app-server-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   createAppServerAppsConfigWriteGate,
@@ -44,6 +46,7 @@ const CONNECTOR_TOOL_INPUT_SCHEMA = {
 } satisfies Tool["inputSchema"];
 
 type BridgeRoute = AppServerInvocationRoute;
+type McpServerElicitationRequestParams = protocol.v2.McpServerElicitationRequestParams;
 
 type BridgeToolCache = {
   snapshotKey: string;
@@ -165,6 +168,64 @@ type PublicationState = {
   snapshot: PersistedConnectorSnapshot;
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function formatJsonForPrompt(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return JSON.stringify(String(value));
+  }
+}
+
+function resolveDisplayedElicitationPayload(
+  params: McpServerElicitationRequestParams,
+): unknown {
+  if (isRecord(params._meta) && isRecord(params._meta.tool_params)) {
+    return params._meta.tool_params;
+  }
+  if (params._meta !== null) {
+    return params._meta;
+  }
+  if (params.mode === "url") {
+    return {
+      url: params.url,
+      elicitationId: params.elicitationId,
+    };
+  }
+  return {
+    requestedSchema: params.requestedSchema,
+  };
+}
+
+function buildDestructiveActionApprovalPrompt(
+  params: McpServerElicitationRequestParams,
+): ElicitRequestFormParams {
+  const meta = isRecord(params._meta) ? params._meta : null;
+  const connectorName =
+    typeof meta?.connector_name === "string" ? meta.connector_name : params.serverName;
+  const toolTitle = typeof meta?.tool_title === "string" ? meta.tool_title : "destructive action";
+  const payload = formatJsonForPrompt(resolveDisplayedElicitationPayload(params));
+
+  return {
+    message: [
+      `The ${connectorName} app requested approval for ${toolTitle}.`,
+      typeof params.message === "string" && params.message.trim().length > 0 ? params.message : "",
+      "App payload:",
+      payload,
+      "Choose accept to continue or decline to reject the action.",
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+    requestedSchema: {
+      type: "object",
+      properties: {},
+    },
+  };
+}
+
 export class ChatgptAppsMcpBridge {
   private readonly server: Server;
   private readonly loadOpenClawConfig: () => OpenClawConfig;
@@ -258,6 +319,8 @@ export class ChatgptAppsMcpBridge {
       workspaceDir: this.workspaceDir,
       env: this.env,
       appsConfigWriteGate: this.appsConfigWriteGate,
+      handleMcpServerElicitation: async (elicitation) =>
+        await this.handleMcpServerElicitation(elicitation),
       resolveProjectedAuth: async () =>
         await this.resolveProjectedAuth({
           config: this.loadOpenClawConfig(),
@@ -361,6 +424,25 @@ export class ChatgptAppsMcpBridge {
       tools,
       routes,
     };
+  }
+
+  private async handleMcpServerElicitation(
+    elicitation: McpServerElicitationRequestParams,
+  ) {
+    const result = await this.server.elicitInput(buildDestructiveActionApprovalPrompt(elicitation));
+    if (result.action !== "accept") {
+      return {
+        action: "decline",
+        content: null,
+        _meta: null,
+      } as const;
+    }
+
+    return {
+      action: "accept",
+      content: {},
+      _meta: null,
+    } as const;
   }
 }
 

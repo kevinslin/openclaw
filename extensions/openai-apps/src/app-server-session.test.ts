@@ -12,6 +12,7 @@ type LoginAccountResponse = protocol.v2.LoginAccountResponse;
 
 const config: ChatgptAppsConfig = {
   enabled: true,
+  allowDestructiveActions: "always",
   appServer: {
     command: "codex",
     args: [],

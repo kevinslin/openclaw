@@ -1,6 +1,9 @@
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { PersistedConnectorRecord } from "./connector-record.js";
@@ -84,6 +87,7 @@ describe("ChatgptAppsMcpBridge", () => {
         snapshot: createPersistedSnapshot(),
         config: {
           enabled: true,
+          allowDestructiveActions: "never",
           appServer: { command: "codex", args: [] },
           connectors: { slack: { enabled: true } },
         },
@@ -146,6 +150,7 @@ describe("ChatgptAppsMcpBridge", () => {
         snapshot,
         config: {
           enabled: true,
+          allowDestructiveActions: "never",
           appServer: { command: "codex", args: [] },
           connectors: { "*": { enabled: true } },
         },
@@ -195,6 +200,7 @@ describe("ChatgptAppsMcpBridge", () => {
         snapshot,
         config: {
           enabled: true,
+          allowDestructiveActions: "never",
           appServer: { command: "codex", args: [] },
           connectors: { slack: { enabled: true } },
         },
@@ -243,6 +249,7 @@ describe("ChatgptAppsMcpBridge", () => {
         snapshot,
         config: {
           enabled: true,
+          allowDestructiveActions: "never",
           appServer: { command: "codex", args: [] },
           connectors: { "*": { enabled: true } },
         },
@@ -290,6 +297,7 @@ describe("ChatgptAppsMcpBridge", () => {
         snapshot,
         config: {
           enabled: true,
+          allowDestructiveActions: "never",
           appServer: { command: "codex", args: [] },
           connectors: { slack: { enabled: true } },
         },
@@ -320,6 +328,7 @@ describe("ChatgptAppsMcpBridge", () => {
       });
       expect(appServerInvoker).toHaveBeenCalledWith(
         expect.objectContaining({
+          handleMcpServerElicitation: expect.any(Function),
           route: {
             connectorId: "slack",
             appId: "asdk_app_slack",
@@ -358,6 +367,7 @@ describe("ChatgptAppsMcpBridge", () => {
           snapshot,
           config: {
             enabled: true,
+            allowDestructiveActions: "never",
             appServer: { command: "codex", args: [] },
             connectors: { slack: { enabled: true } },
           },
@@ -397,6 +407,228 @@ describe("ChatgptAppsMcpBridge", () => {
     }
   });
 
+  it("prompts MCP clients for destructive actions when configured for on-request", async () => {
+    const stateDir = await createStateDir();
+    const snapshot = createPersistedSnapshot();
+    await writeSnapshot(stateDir, snapshot);
+
+    const appServerInvoker = vi.fn(async (params) => {
+      const response = await params.handleMcpServerElicitation?.({
+        threadId: "thr_123",
+        turnId: "turn_123",
+        serverName: "codex_apps",
+        mode: "form",
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          connector_name: "Slack",
+          tool_title: "post_message",
+          tool_params: {
+            channel: "#launch",
+            text: "Ship it",
+          },
+        },
+        message: "Allow Slack to post a message?",
+        requestedSchema: {
+          type: "object",
+          properties: {},
+        },
+      });
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(response) }],
+      };
+    });
+
+    const bridge = new ChatgptAppsMcpBridge({
+      loadOpenClawConfig: () => createConfig(),
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+      ensureFreshSnapshot: async () => ({
+        status: "ok",
+        source: "cache",
+        snapshot,
+        config: {
+          enabled: true,
+          allowDestructiveActions: "on-request",
+          appServer: { command: "codex", args: [] },
+          connectors: { slack: { enabled: true } },
+        },
+        openclawConfig: createConfig(),
+        statePaths: resolveChatgptAppsStatePaths({
+          OPENCLAW_STATE_DIR: stateDir,
+          HOME: os.tmpdir(),
+        }),
+      }),
+      resolveProjectedAuth: async () => ({
+        status: "ok",
+        accessToken: "access-token",
+        accountId: "acct_123",
+        planType: null,
+        profileId: "openai-codex:default",
+        identity: { email: "user@example.com", profileName: "user@example.com" },
+      }),
+      appServerInvoker,
+    });
+
+    const client = new Client(
+      { name: "test-client", version: "1.0.0" },
+      { capabilities: { elicitation: { form: {} } } },
+    );
+    const elicitationRequests: unknown[] = [];
+    client.setRequestHandler(ElicitRequestSchema, async (request) => {
+      elicitationRequests.push(request.params);
+      return {
+        action: "accept",
+        content: {},
+      };
+    });
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([bridge.connect(serverTransport), client.connect(clientTransport)]);
+
+    try {
+      const result = await client.callTool({
+        name: "chatgpt_app_slack",
+        arguments: {
+          request: "Send a launch update to #launch",
+        },
+      });
+
+      expect(result).toEqual({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              action: "accept",
+              content: {},
+              _meta: null,
+            }),
+          },
+        ],
+      });
+      expect(elicitationRequests).toEqual([
+        expect.objectContaining({
+          mode: "form",
+          requestedSchema: {
+            type: "object",
+            properties: {},
+          },
+        }),
+      ]);
+      const prompt = elicitationRequests[0] as { message: string };
+      expect(prompt.message).toContain("The Slack app requested approval for post_message.");
+      expect(prompt.message).toContain("Allow Slack to post a message?");
+      expect(prompt.message).toContain("App payload:");
+      expect(prompt.message).toContain('"channel": "#launch"');
+      expect(prompt.message).toContain('"text": "Ship it"');
+      expect(prompt.message).toContain("Choose accept to continue or decline to reject the action.");
+    } finally {
+      await Promise.all([client.close(), bridge.close()]);
+    }
+  });
+
+  it("maps declined MCP approvals back to the app-server decline payload", async () => {
+    const stateDir = await createStateDir();
+    const snapshot = createPersistedSnapshot();
+    await writeSnapshot(stateDir, snapshot);
+
+    const appServerInvoker = vi.fn(async (params) => {
+      const response = await params.handleMcpServerElicitation?.({
+        threadId: "thr_123",
+        turnId: "turn_123",
+        serverName: "codex_apps",
+        mode: "form",
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          connector_name: "Slack",
+          tool_title: "post_message",
+          tool_params: {
+            channel: "#launch",
+          },
+        },
+        message: "Allow Slack to post a message?",
+        requestedSchema: {
+          type: "object",
+          properties: {},
+        },
+      });
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(response) }],
+      };
+    });
+
+    const bridge = new ChatgptAppsMcpBridge({
+      loadOpenClawConfig: () => createConfig(),
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+      ensureFreshSnapshot: async () => ({
+        status: "ok",
+        source: "cache",
+        snapshot,
+        config: {
+          enabled: true,
+          allowDestructiveActions: "on-request",
+          appServer: { command: "codex", args: [] },
+          connectors: { slack: { enabled: true } },
+        },
+        openclawConfig: createConfig(),
+        statePaths: resolveChatgptAppsStatePaths({
+          OPENCLAW_STATE_DIR: stateDir,
+          HOME: os.tmpdir(),
+        }),
+      }),
+      resolveProjectedAuth: async () => ({
+        status: "ok",
+        accessToken: "access-token",
+        accountId: "acct_123",
+        planType: null,
+        profileId: "openai-codex:default",
+        identity: { email: "user@example.com", profileName: "user@example.com" },
+      }),
+      appServerInvoker,
+    });
+
+    const client = new Client(
+      { name: "test-client", version: "1.0.0" },
+      { capabilities: { elicitation: { form: {} } } },
+    );
+    client.setRequestHandler(ElicitRequestSchema, async () => ({
+      action: "decline",
+    }));
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([bridge.connect(serverTransport), client.connect(clientTransport)]);
+
+    try {
+      const result = await client.callTool({
+        name: "chatgpt_app_slack",
+        arguments: {
+          request: "Send a launch update to #launch",
+        },
+      });
+
+      expect(result).toEqual({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              action: "decline",
+              content: null,
+              _meta: null,
+            }),
+          },
+        ],
+      });
+    } finally {
+      await Promise.all([client.close(), bridge.close()]);
+    }
+  });
+
   it("honors wildcard enablement with explicit disables", async () => {
     const stateDir = await createStateDir();
     const snapshot = createPersistedSnapshot();
@@ -429,6 +661,7 @@ describe("ChatgptAppsMcpBridge", () => {
         snapshot,
         config: {
           enabled: true,
+          allowDestructiveActions: "never",
           appServer: { command: "codex", args: [] },
           connectors: {
             "*": { enabled: true },

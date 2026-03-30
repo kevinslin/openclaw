@@ -11,6 +11,7 @@ describe("openai-apps bundle config validation", () => {
             enabled: true,
             config: {
               enabled: true,
+              allow_destructive_actions: "always",
               connectors: {
                 gmail: {
                   enabled: true,

@@ -9,6 +9,7 @@ describe("resolveChatgptAppsConfig", () => {
   it("applies defaults when openai-apps config is absent", () => {
     expect(resolveChatgptAppsConfig({})).toEqual({
       enabled: false,
+      allowDestructiveActions: "never",
       appServer: {
         command: "codex",
         args: [],
@@ -20,6 +21,7 @@ describe("resolveChatgptAppsConfig", () => {
   it("normalizes app-server args and connector flags", () => {
     const config = resolveChatgptAppsConfig({
       enabled: true,
+      allow_destructive_actions: "on-request",
       appServer: {
         command: "codex-dev",
         args: ["app-server", "--analytics-default-enabled", "--foo"],
@@ -33,6 +35,7 @@ describe("resolveChatgptAppsConfig", () => {
     });
 
     expect(config.enabled).toBe(true);
+    expect(config.allowDestructiveActions).toBe("on-request");
     expect(config.appServer).toEqual({
       command: "codex-dev",
       args: ["--foo"],
@@ -48,6 +51,7 @@ describe("buildDerivedAppsConfig", () => {
   it("mirrors wildcard and connector enablement into the sidecar config", () => {
     const derived = buildDerivedAppsConfig({
       enabled: true,
+      allowDestructiveActions: "always",
       appServer: { command: "codex", args: [] },
       connectors: {
         "*": { enabled: true },
@@ -72,6 +76,7 @@ describe("buildDerivedAppsConfig", () => {
   it("omits optional null-valued fields from sidecar config entries", () => {
     const derived = buildDerivedAppsConfig({
       enabled: true,
+      allowDestructiveActions: "always",
       appServer: { command: "codex", args: [] },
       connectors: {
         gmail: { enabled: true },
@@ -99,5 +104,30 @@ describe("buildDerivedAppsConfig", () => {
     });
 
     expect(hashChatgptAppsConfig(first)).toBe(hashChatgptAppsConfig(second));
+  });
+
+  it("disables destructive actions in the sidecar config when configured to never allow them", () => {
+    const derived = buildDerivedAppsConfig({
+      enabled: true,
+      allowDestructiveActions: "never",
+      appServer: { command: "codex", args: [] },
+      connectors: {
+        "*": { enabled: true },
+        gmail: { enabled: true },
+      },
+    });
+
+    expect(derived).toEqual({
+      _default: {
+        enabled: true,
+        destructive_enabled: false,
+        open_world_enabled: true,
+      },
+      gmail: {
+        enabled: true,
+        destructive_enabled: false,
+        open_world_enabled: true,
+      },
+    });
   });
 });

@@ -13,7 +13,7 @@ import {
 } from "./app-server-apps-config.js";
 import { resolveAppServerCommand } from "./app-server-command.js";
 import type { ChatgptAppsResolvedAuth } from "./auth-projector.js";
-import type { ChatgptAppsConfig } from "./config.js";
+import type { ChatgptAppsConfig, AllowDestructiveActionsMode } from "./config.js";
 import type { ChatgptAppsStatePaths } from "./state-paths.js";
 
 type ConfigValueWriteParams = protocol.v2.ConfigValueWriteParams;
@@ -22,6 +22,8 @@ type GetAuthStatusResponse = protocol.GetAuthStatusResponse;
 type GetAccountResponse = protocol.v2.GetAccountResponse;
 type LoginAccountParams = protocol.v2.LoginAccountParams;
 type LoginAccountResponse = protocol.v2.LoginAccountResponse;
+type McpServerElicitationRequestParams = protocol.v2.McpServerElicitationRequestParams;
+type McpServerElicitationRequestResponse = protocol.v2.McpServerElicitationRequestResponse;
 type ThreadReadResponse = protocol.v2.ThreadReadResponse;
 type ThreadStartResponse = protocol.v2.ThreadStartResponse;
 type TurnCompletedNotification = protocol.v2.TurnCompletedNotification;
@@ -182,6 +184,9 @@ export type AppServerToolInvoker = (params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   resolveProjectedAuth: ProjectedAuthResolver;
+  handleMcpServerElicitation?: (
+    params: McpServerElicitationRequestParams,
+  ) => Promise<McpServerElicitationRequestResponse>;
   appsConfigWriteGate?: AppServerAppsConfigWriteGate;
   clientFactory?: (params: {
     command: string;
@@ -383,6 +388,41 @@ function buildUnsupportedServerRequestError(message: string | null | undefined):
   return new Error(`App invocation requested unsupported server request: ${method}`);
 }
 
+function buildAcceptedMcpServerElicitationResponse(): McpServerElicitationRequestResponse {
+  return {
+    action: "accept",
+    content: {},
+    _meta: null,
+  };
+}
+
+function buildDeclinedMcpServerElicitationResponse(): McpServerElicitationRequestResponse {
+  return {
+    action: "decline",
+    content: null,
+    _meta: null,
+  };
+}
+
+async function resolveMcpServerElicitationResponse(params: {
+  mode: AllowDestructiveActionsMode;
+  request: McpServerElicitationRequestParams;
+  handleMcpServerElicitation?: (
+    params: McpServerElicitationRequestParams,
+  ) => Promise<McpServerElicitationRequestResponse>;
+}): Promise<McpServerElicitationRequestResponse> {
+  if (params.mode === "always") {
+    return buildAcceptedMcpServerElicitationResponse();
+  }
+  if (params.mode === "never") {
+    return buildDeclinedMcpServerElicitationResponse();
+  }
+  if (!params.handleMcpServerElicitation) {
+    return buildDeclinedMcpServerElicitationResponse();
+  }
+  return await params.handleMcpServerElicitation(params.request);
+}
+
 export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
   const env = params.env ?? process.env;
   const turnTimeoutMs = resolveTurnTimeoutMs(env);
@@ -553,12 +593,18 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
       }),
     );
     unsubscribeHandlers.push(
-      client.handleServerRequest("mcpServer/elicitation/request", async () => {
-        return {
-          action: "decline",
-          content: null,
-          _meta: null,
-        };
+      client.handleServerRequest("mcpServer/elicitation/request", async (context) => {
+        const response = await resolveMcpServerElicitationResponse({
+          mode: params.config.allowDestructiveActions,
+          request: context.request.params,
+          handleMcpServerElicitation: params.handleMcpServerElicitation,
+        });
+        writeDebugLog(
+          env,
+          `app-server elicitation resolved action=${response.action}`,
+          params.statePaths.rootDir,
+        );
+        return response;
       }),
     );
     registerFailureHandler("item/commandExecution/requestApproval", () =>
