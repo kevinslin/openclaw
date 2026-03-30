@@ -1,7 +1,10 @@
+import { mkdtemp, rm, stat } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { protocol } from "codex-app-server-sdk";
 import { describe, expect, it, vi } from "vitest";
 import { invokeViaAppServer, type AppServerInvocationClient } from "./app-server-invoker.js";
-import type { ChatgptAppsConfig } from "./config.js";
+import { buildDerivedAppsConfig, type ChatgptAppsConfig } from "./config.js";
 import type { ChatgptAppsStatePaths } from "./state-paths.js";
 
 const config: ChatgptAppsConfig = {
@@ -154,12 +157,28 @@ function createMockClient(
   };
 }
 
+async function createTempStatePaths(): Promise<ChatgptAppsStatePaths> {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "openai-apps-invoker-"));
+  return {
+    rootDir,
+    codexHomeDir: path.join(rootDir, "codex-home"),
+    snapshotPath: path.join(rootDir, "connectors.snapshot.json"),
+    derivedConfigPath: path.join(rootDir, "codex-apps.config.json"),
+    refreshDebugPath: path.join(rootDir, "refresh-debug.json"),
+  };
+}
+
 describe("invokeViaAppServer", () => {
-  // TODO: add back mentions
-  it("creates a fresh thread and starts a turn without a per-call codex_apps warmup", async () => {
+  it("writes derived apps config into the shared codex home before the fresh invocation thread", async () => {
     const startThread = vi.fn<AppServerInvocationClient["startThread"]>(async () =>
       createThreadStartResponse(),
     );
+    const writeConfigValue = vi.fn<AppServerInvocationClient["writeConfigValue"]>(async () => ({
+      status: "ok",
+      version: "1",
+      filePath: "/tmp/openai-apps/config.toml",
+      overriddenMetadata: null,
+    }));
     const runTurn = vi.fn<AppServerInvocationClient["runTurn"]>(async () => ({
       start: {
         turn: {
@@ -180,7 +199,8 @@ describe("invokeViaAppServer", () => {
       },
     }));
     const registeredMethods: string[] = [];
-    const client = createMockClient({ startThread, runTurn }, registeredMethods);
+    let factoryEnv: NodeJS.ProcessEnv | undefined;
+    const client = createMockClient({ startThread, runTurn, writeConfigValue }, registeredMethods);
 
     const result = await invokeViaAppServer({
       config,
@@ -201,12 +221,25 @@ describe("invokeViaAppServer", () => {
         profileId: "openai-codex:default",
         identity: { email: "user@example.com", profileName: "user@example.com" },
       }),
-      clientFactory: async () => client,
+      clientFactory: async (factoryParams) => {
+        factoryEnv = factoryParams.env;
+        return client;
+      },
     });
 
     expect(result).toEqual({
       content: [{ type: "text", text: "ok" }],
     });
+    expect(factoryEnv?.CODEX_HOME).toBe(statePaths.codexHomeDir);
+    expect(writeConfigValue).toHaveBeenCalledWith({
+      keyPath: "apps",
+      value: buildDerivedAppsConfig(config),
+      mergeStrategy: "replace",
+      expectedVersion: null,
+    });
+    expect(writeConfigValue.mock.invocationCallOrder[0]).toBeLessThan(
+      startThread.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
     expect(startThread).toHaveBeenCalledWith({
       cwd: process.cwd(),
       approvalPolicy: {
@@ -260,6 +293,56 @@ describe("invokeViaAppServer", () => {
       path: "app://asdk_app_gmail",
     });
     expect(registeredMethods).not.toContain("item/tool/call");
+  });
+
+  it("creates and preserves the shared codex home directory across repeated invocations", async () => {
+    const tempStatePaths = await createTempStatePaths();
+    const observedHomeDirs: string[] = [];
+
+    try {
+      const runInvocation = async (request: string) =>
+        await invokeViaAppServer({
+          config,
+          route: {
+            connectorId: "gmail",
+            appId: "asdk_app_gmail",
+            publishedName: "chatgpt_app_gmail",
+            appName: "Gmail",
+            appInvocationToken: "gmail",
+          },
+          args: { request },
+          statePaths: tempStatePaths,
+          resolveProjectedAuth: async () => ({
+            status: "ok",
+            accessToken: "access-token",
+            accountId: "acct_123",
+            planType: null,
+            profileId: "openai-codex:default",
+            identity: { email: "user@example.com", profileName: "user@example.com" },
+          }),
+          clientFactory: async (factoryParams) => {
+            const client = createMockClient();
+            const info = await stat(tempStatePaths.codexHomeDir);
+            if (info.isDirectory()) {
+              observedHomeDirs.push(factoryParams.env.CODEX_HOME ?? "");
+            }
+            expect(factoryParams.env.CODEX_HOME).toBe(tempStatePaths.codexHomeDir);
+            return client;
+          },
+        });
+
+      await expect(runInvocation("Summarize my recent emails")).resolves.toEqual({
+        content: [{ type: "text", text: "ok" }],
+      });
+      await expect(runInvocation("Summarize my second most recent email")).resolves.toEqual({
+        content: [{ type: "text", text: "ok" }],
+      });
+
+      expect(observedHomeDirs).toEqual([tempStatePaths.codexHomeDir, tempStatePaths.codexHomeDir]);
+      expect((await stat(tempStatePaths.codexHomeDir)).isDirectory()).toBe(true);
+    } finally {
+      await rm(tempStatePaths.rootDir, { recursive: true, force: true });
+    }
   });
 
   // TODO: doesn't work

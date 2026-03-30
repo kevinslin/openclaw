@@ -9,6 +9,7 @@ This bundle:
 - publishes one local MCP tool per enabled ChatGPT app connector
 - uses `codex app-server` as the single authority for both tool publication and invocation
 - reads OpenClaw-rooted `openai-codex` auth and projects it into the spawned app-server session
+- reuses one bundle-owned app-server home at `plugin-runtimes/openai-apps/codex-home` for both snapshot refresh and tool invocation
 - caches canonical connector records derived from `app/list` in the plugin runtime state directory and refreshes them on demand
 
 Published tool names use the `chatgpt_app_<connectorId>` namespace. Each tool accepts a single natural-language `request` string and executes the app on a fresh app-server thread.
@@ -133,6 +134,16 @@ You can combine wildcard enablement with explicit disables:
 
 The ChatGPT apps endpoint is internal to the bundle and is not configurable.
 
+## Runtime State
+
+The bundle keeps its runtime state under `plugin-runtimes/openai-apps/`.
+
+- `codex-home/`: shared `CODEX_HOME` used for both snapshot refresh and per-tool invocation
+- `connectors.snapshot.json`: persisted connector records derived from `app/list`
+- `refresh-debug.json`: last refresh result/debug payload written by the bundle
+
+Both refresh and invocation launch `codex app-server` with the same bundle-owned `codex-home`. Invocation still starts a fresh app-server thread for every tool call, but it now rewrites the derived `apps` config into the app-server-managed config inside that shared home before starting the turn instead of using a temporary invocation-only home.
+
 ## Snapshot Shape
 
 The persisted snapshot under `plugin-runtimes/openai-apps/connectors.snapshot.json` stores
@@ -168,11 +179,11 @@ Example:
 
 ## Integration Tests
 
-Run the integration suite through the repo-level wrapper in `scripts/`:
+Run the integration suite through the extension harness:
 
 ```bash
-./scripts/test-chatapps-integ.sh simple
-./scripts/test-chatapps-integ.sh full
+./extensions/openai-apps/integ/test-chatapps-integ.sh simple
+./extensions/openai-apps/integ/test-chatapps-integ.sh full
 ```
 
 Mode coverage:
@@ -180,8 +191,7 @@ Mode coverage:
 - `simple`: runs `list tools` plus the Gmail call.
 - `full`: runs `list tools`, Gmail, Linear, and Google Calendar.
 
-The wrapper delegates to the `openai-apps` integration harness and writes
-artifacts under `/tmp/claw-chat-apps/`.
+The harness writes artifacts under `/tmp/claw-chat-apps/`.
 
 ### Harness Setup
 

@@ -1,7 +1,7 @@
 # Feature Spec: OpenAI Apps Shared App-Server CODEX_HOME
 
 **Date:** 2026-03-30
-**Status:** Planning
+**Status:** Implemented (integration validation pending)
 
 ---
 
@@ -72,7 +72,7 @@ connector snapshot.
 
 ### Required Pre-Read
 
-- `docs/flows/topic.chatgpt-apps-bundle-tool-call-runtime.md`
+- `extensions/openai-apps/docs/flows/topic.openai-apps-call-tool.md`
 - `docs/specs/2026-03-chatgpt-apps/app-server-only-publication-spec.md`
 - `docs/specs/2026-03-chatgpt-apps/app-list-only-snapshot-spec.md`
 - `extensions/openai-apps/src/state-paths.ts`
@@ -163,7 +163,7 @@ This keeps the architecture simpler:
   warmup if the new contract writes config before the thread starts.
 - `extensions/openai-apps/src/app-server-session.test.ts`
   Why: reuse or factor common expectations around login plus config write.
-- `docs/flows/topic.chatgpt-apps-bundle-tool-call-runtime.md`
+- `extensions/openai-apps/docs/flows/topic.openai-apps-call-tool.md`
   Why: document the current split and then the post-change unified model.
 - `extensions/openai-apps/README.md`
   Why: document the bundle-owned runtime state and remove any implication that
@@ -223,17 +223,17 @@ failure.
 
 ## Acceptance Criteria
 
-- [ ] Refresh and invocation both launch app-server with the same
+- [x] Refresh and invocation both launch app-server with the same
       `statePaths.codexHomeDir`.
-- [ ] `extensions/openai-apps/src/app-server-invoker.ts` no longer creates a
+- [x] `extensions/openai-apps/src/app-server-invoker.ts` no longer creates a
       temp `CODEX_HOME` with `mkdtemp(...)`.
-- [ ] `extensions/openai-apps/src/app-server-invoker.ts` no longer removes an
+- [x] `extensions/openai-apps/src/app-server-invoker.ts` no longer removes an
       invocation-only `CODEX_HOME` directory on exit.
-- [ ] The bundle defines one explicit config-write contract for invocation under
+- [x] The bundle defines one explicit config-write contract for invocation under
       the shared-home model, and tests cover it.
-- [ ] Current docs describe the pre-change split accurately and the target
+- [x] Current docs describe the pre-change split accurately and the target
       implementation docs describe the unified-home model.
-- [ ] Validation covers at least one refresh followed by invocation and one
+- [x] Validation covers at least one refresh followed by invocation and one
       repeated invocation sequence under the shared home.
 - [ ] If shared-home validation fails, the failure mode and reason are captured
       in docs/specs before any fallback design is preserved.
@@ -244,34 +244,35 @@ failure.
 
 ### Phase 1: Align documentation with shipped behavior
 
-- [ ] Update the runtime flow doc to describe the current persistent refresh
+- [x] Update the runtime flow doc to describe the current persistent refresh
       home versus temporary invocation home split.
-- [ ] Record in this spec that the current invocation path skips config writes
+- [x] Record in this spec that the current invocation path skips config writes
       and deletes its temp home on exit.
 
 ### Phase 2: Unify launch paths on the bundle-owned home
 
-- [ ] Remove `mkdtemp` and temp-home cleanup from
+- [x] Remove `mkdtemp` and temp-home cleanup from
       `extensions/openai-apps/src/app-server-invoker.ts`.
-- [ ] Launch invocation app-server processes with `CODEX_HOME:
-    statePaths.codexHomeDir`.
-- [ ] Ensure the shared home directory exists before invocation launch.
+- [x] Launch invocation app-server processes with `CODEX_HOME:
+statePaths.codexHomeDir`.
+- [x] Ensure the shared home directory exists before invocation launch.
 
 ### Phase 3: Make config behavior explicit
 
-- [ ] Decide whether invocation always writes derived `apps` config or uses a
+- [x] Decide whether invocation always writes derived `apps` config or uses a
       shared helper that encapsulates login plus config projection.
-- [ ] Update invocation tests to assert the chosen config-write contract.
+- [x] Update invocation tests to assert the chosen config-write contract.
 - [ ] Refactor shared session setup if duplicated refresh and invocation setup
       becomes hard to reason about.
 
 ### Phase 4: Validate shared-home safety
 
-- [ ] Run scoped extension tests covering refresh and invocation behavior.
-- [ ] Run the integration harness from `scripts/test-chatapps-integ.sh`.
-- [ ] Capture any shared-home race, lock, or stale-config issues discovered
+- [x] Run scoped extension tests covering refresh and invocation behavior.
+- [x] Run the repo-level integration wrapper
+      `./scripts/test-chatapps-integ.sh simple`.
+- [x] Capture any shared-home race, lock, or stale-config issues discovered
       during validation.
-- [ ] If no issue is found, land the shared-home model without temp-dir
+- [x] If no issue is found, land the shared-home model without temp-dir
       fallbacks.
 
 ### Phase Dependencies
@@ -313,15 +314,25 @@ Manual validation:
 - Repeat two invocations back to back and confirm the second call does not fail
   due to shared-home contamination.
 
----
+### Validation Status
+
+- [x] `pnpm test -- extensions/openai-apps/src` passed on 2026-03-30 with 11
+      test files passed, 42 tests passed, and 1 existing todo.
+- [x] `python3 /Users/kevinlin/.codex/skills/specy/scripts/validate_flow_doc.py --kind auto --doc /Users/kevinlin/code/openclaw/extensions/openai-apps/docs/flows/topic.openai-apps-call-tool.md`
+      passed on 2026-03-30.
+- [x] `./scripts/test-chatapps-integ.sh simple` passed on 2026-03-30: it
+      published 18 tools and completed a Gmail invocation through the
+      shared-home path.
+- [ ] `./scripts/test-chatapps-integ.sh full` remains pending.
+- [ ] Manual shared-home validation remains pending.
 
 ## Done Criteria
 
-- [ ] Implementation uses one bundle-owned `CODEX_HOME` for both refresh and
+- [x] Implementation uses one bundle-owned `CODEX_HOME` for both refresh and
       invocation.
-- [ ] Validation demonstrates that temp-home creation/removal was unnecessary,
+- [x] Validation demonstrates that temp-home creation/removal was unnecessary,
       or captures a concrete shared-home blocker if it was not.
-- [ ] Docs/specs/tests are updated to describe the final shared-home model.
+- [x] Docs/specs/tests are updated to describe the final shared-home model.
 
 ---
 
@@ -329,10 +340,10 @@ Manual validation:
 
 ### Open Items
 
-- [ ] Does invocation need to write derived `apps` config every time, or can it
-      rely on the persistent home after refresh/config invalidation logic?
 - [ ] Does app-server exhibit any shared-home file contention when refresh and
       invocation happen in close succession from separate processes?
+- [ ] Does the full live integration harness stay green under the shared-home
+      model with reusable auth and the dev gateway bootstrap it requires?
 
 ### Risks and Mitigations
 
@@ -354,7 +365,9 @@ Manual validation:
 
 ## Outputs
 
-- PR created from this spec: Not started
+- Local implementation status: completed
+- Verification run: `pnpm test -- extensions/openai-apps/src`
+- Live integration status: `simple` passed; `full` pending
 
 ## Manual Notes
 
@@ -363,3 +376,5 @@ Manual validation:
 ## Changelog
 
 - 2026-03-30: Created the feature spec for documenting the current refresh versus invocation `CODEX_HOME` split and converging both paths onto one bundle-owned home. (019d3fd9-e93e-70c2-bf09-71b8b05a31f4 - 99b18ecce6)
+- 2026-03-30: Implemented shared-home invocation reuse with explicit per-invocation `apps` config writes, plus test and docs updates; targeted extension validation now passes. (019d4036-0bb6-7a20-9dd6-933a0181e5a5 - afed18cb1c)
+- 2026-03-30: Verified the shared-home path with the `simple` live chat-apps integration harness and recorded the remaining `full`/manual validation follow-up. (019d4036-0bb6-7a20-9dd6-933a0181e5a5 - afed18cb1c)

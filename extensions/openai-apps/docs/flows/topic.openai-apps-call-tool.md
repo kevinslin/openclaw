@@ -4,7 +4,7 @@ Last updated: 2026-03-30
 
 ## Purpose
 
-This flow documents how a published ChatGPT app tool is invoked after MCP `callTool` reaches the bundle. It answers where route metadata is resolved, how the per-call app-server session is constructed, and which guards can fail the invocation before a final text result is returned.
+This flow documents how a published ChatGPT app tool is invoked after MCP `callTool` reaches the bundle. It answers where route metadata is resolved, how the shared bundle-owned app-server home is prepared for each fresh invocation thread, and which guards can fail the invocation before a final text result is returned.
 
 ## Entry points
 
@@ -92,7 +92,7 @@ Ordered call path:
 
 1. Resolve auth and the app-server binary before spawning anything.
    ```ts
-   // Source: extensions/openai-apps/src/app-server-invoker.ts#L359-L381
+   // Source: extensions/openai-apps/src/app-server-invoker.ts#L367-L389
    auth := await params.resolveProjectedAuth()
    if auth.status !== "ok"
      throw Error(auth.message)
@@ -102,35 +102,39 @@ Ordered call path:
    })
    writeDebugLog(env, `app-server command resolved command=${resolvedCommand} args=${params.config.appServer.args.join(" ")}`, params.statePaths.rootDir)
    ```
-2. Create a temporary invocation-specific `CODEX_HOME` and spawn the client with manual unhandled-request strategy.
+2. Reuse the bundle-owned `CODEX_HOME` and spawn the client with manual unhandled-request strategy.
    ```ts
-   // Source: extensions/openai-apps/src/app-server-invoker.ts#L383-L433
-   await mkdir(params.statePaths.rootDir, { recursive: true })
-   invocationCodexHomeDir := await mkdtemp(path.join(os.tmpdir(), "openclaw-openai-apps-invoke-"))
+   // Source: extensions/openai-apps/src/app-server-invoker.ts#L391-L437
+   await mkdir(params.statePaths.codexHomeDir, { recursive: true })
    client := await clientFactory({
      command: resolvedCommand,
      args: params.config.appServer.args,
      cwd: params.workspaceDir,
      env: {
        ...env,
-       CODEX_HOME: invocationCodexHomeDir,
+       CODEX_HOME: params.statePaths.codexHomeDir,
      },
    })
    // clientFactory defaults to CodexAppServerClient.spawn(..., { unhandledServerRequestStrategy: "manual" })
    ```
-3. Initialize the app-server session, subscribe to auth refresh, and log in without writing derived app config.
+3. Initialize the app-server session, subscribe to auth refresh, log in, and rewrite the derived app config in the shared home before starting the turn.
    ```ts
-   // Source: extensions/openai-apps/src/app-server-invoker.ts#L435-L480
+   // Source: extensions/openai-apps/src/app-server-invoker.ts#L443-L488
    await client.initializeSession()
    unsubscribeRefresh := client.handleChatgptAuthTokensRefresh(async () => refreshedTokens)
    await client.loginAccount(toLoginParams(auth))
-   writeDebugLog(env, "app-server config write skipped for invocation session", params.statePaths.rootDir)
+   await client.writeConfigValue({
+     keyPath: "apps",
+     value: buildDerivedAppsConfig(params.config),
+     mergeStrategy: "replace",
+     expectedVersion: null,
+   })
    ```
 
 State transitions / outputs:
 
 - Input: resolved route, projected auth, `appServer.command/args`, runtime env, workspace dir
-- Output: live per-call app-server client plus a temp `invocationCodexHomeDir`
+- Output: live per-call app-server client pointed at the bundle-owned `statePaths.codexHomeDir`
 
 Branch points:
 
@@ -141,7 +145,7 @@ External boundaries:
 
 - OpenAI Codex OAuth projection
 - Child-process spawn through `CodexAppServerClient.spawn(...)`
-- Temporary filesystem state under `/tmp/openclaw-openai-apps-invoke-*`
+- Bundle-owned filesystem state under `plugin-runtimes/openai-apps/codex-home`
 
 ### Phase 3: Guard server requests and run the turn
 
@@ -157,7 +161,7 @@ Ordered call path:
 
 1. Register the explicit server-request policy for this invocation.
    ```ts
-   // Source: extensions/openai-apps/src/app-server-invoker.ts#L482-L558
+   // Source: extensions/openai-apps/src/app-server-invoker.ts#L490-L566
    handledServerRequests := new Set([
      "item/tool/requestUserInput",
      "item/permissions/requestApproval",
@@ -193,8 +197,8 @@ Ordered call path:
    ```
 2. Build the invocation input from the published route and user request.
    ```ts
-   // Source: extensions/openai-apps/src/app-server-invoker.ts#L178-L203
-   // Source: extensions/openai-apps/src/app-server-invoker.ts#L560-L576
+   // Source: extensions/openai-apps/src/app-server-invoker.ts#L186-L210
+   // Source: extensions/openai-apps/src/app-server-invoker.ts#L568-L584
    request := typeof args?.request === "string" ? args.request.trim() : ""
    if !request
      throw Error('ChatGPT app tools require a non-empty "request" string')
@@ -213,10 +217,10 @@ Ordered call path:
    ```
 3. Start a thread and run the turn under the fixed approval/output contract.
    ```ts
-   // Source: extensions/openai-apps/src/app-server-invoker.ts#L578-L620
+   // Source: extensions/openai-apps/src/app-server-invoker.ts#L586-L628
    threadStart := await client.startThread({
      cwd: params.workspaceDir ?? process.cwd(),
-     approvalPolicy: "never",
+     approvalPolicy: APP_INVOCATION_APPROVAL_POLICY,
      developerInstructions: buildDeveloperInstructions(params.route),
      ephemeral: false,
      experimentalRawEvents: false,
@@ -227,7 +231,7 @@ Ordered call path:
      {
        threadId,
        cwd: params.workspaceDir ?? process.cwd(),
-       approvalPolicy: "never",
+       approvalPolicy: APP_INVOCATION_APPROVAL_POLICY,
        outputSchema: CONNECTOR_OUTPUT_SCHEMA,
        input: invocationInput,
      },
@@ -272,8 +276,8 @@ Ordered call path:
 
 1. Read the completed thread and recover the final user-visible text.
    ```ts
-   // Source: extensions/openai-apps/src/app-server-invoker.ts#L285-L336
-   // Source: extensions/openai-apps/src/app-server-invoker.ts#L622-L634
+   // Source: extensions/openai-apps/src/app-server-invoker.ts#L293-L344
+   // Source: extensions/openai-apps/src/app-server-invoker.ts#L630-L637
    thread := await client.readThread({ threadId, includeTurns: true })
    text := extractTurnText(thread, run.start.turn.id)
    extractTurnText(response, turnId) {
@@ -297,9 +301,9 @@ Ordered call path:
      throw Error("App invocation completed without a usable final result")
    return { content: [{ type: "text", text }] }
    ```
-2. Normalize any failure, then unsubscribe, close the client, and remove the temporary home directory.
+2. Normalize any failure, then unsubscribe and close the client without deleting the shared home.
    ```ts
-   // Source: extensions/openai-apps/src/app-server-invoker.ts#L635-L652
+   // Source: extensions/openai-apps/src/app-server-invoker.ts#L643-L659
    catch error
      normalizedError := buildUnsupportedServerRequestError(error.message) ?? error
      writeDebugLog(env, `app-server invoke failed error=${message}`, params.statePaths.rootDir)
@@ -311,7 +315,6 @@ Ordered call path:
        unsubscribe()
      unsubscribeRefresh?.()
      await client.close()
-     await rm(invocationCodexHomeDir, { recursive: true, force: true }).catch(() => {})
    ```
 
 State transitions / outputs:
@@ -328,7 +331,7 @@ Branch points:
 External boundaries:
 
 - App-server RPC `readThread`
-- Temporary filesystem cleanup for the invocation-specific `CODEX_HOME`
+- None identified beyond the shared bundle runtime directory already in use
 
 ## State
 
@@ -336,28 +339,30 @@ External boundaries:
 
 - `route`: pulled from `cache.routes` in `callTool(...)` before `invokeViaAppServer(...)` runs, so the invocation uses the same published connector identity that `listTools()` exposed to the caller.
 - `args.request`: validated by `readInvocationRequest(...)` before `startThread(...)`, so no thread/turn is created for empty requests.
-- `invocationCodexHomeDir`: created before `clientFactory(...)` and removed in `finally`, so per-call app-server state is isolated from the persistent refresh-side `codexHomeDir`.
+- `statePaths.codexHomeDir`: created before `clientFactory(...)` and reused across refresh and invocation, so both paths target the same bundle-owned app-server home.
+- Derived `apps` config: written after `loginAccount(...)` and before `startThread(...)`, so invocation does not depend on stale config from a prior refresh.
 - `serverRequestError`: set during server-request callbacks and checked immediately after `runTurn(...)`, so unsupported requests are not hidden by a superficially successful turn status.
 - `threadId` and `run.start.turn.id`: created before `readThread(...)`, so final text extraction always targets the exact turn that this invocation started.
 
 ### Runtime controls (or `None identified`)
 
-| Name                                                                      | Kind          | Where Read                                                                                                                 | Effect on Flow                                                                        |
-| ------------------------------------------------------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `plugins.entries["openai-apps"].config.appServer.command/args`            | config        | `extensions/openai-apps/src/mcp-bridge.ts#L247-L259`, `extensions/openai-apps/src/app-server-invoker.ts#L373-L433`         | Chooses the app-server binary and argv used for each tool invocation.                 |
-| `plugins.entries["openai-apps"].config.connectors`                        | config        | `extensions/openai-apps/src/mcp-bridge.ts#L285-L356`                                                                       | Indirectly determines whether a tool route exists at all for the requested connector. |
-| `workspaceDir` / current cwd                                              | runtime input | `extensions/openai-apps/src/app-server-invoker.ts#L425-L433`, `extensions/openai-apps/src/app-server-invoker.ts#L578-L599` | Sets the thread cwd and child-process cwd for the invocation session.                 |
-| `args.request`                                                            | request       | `extensions/openai-apps/src/app-server-invoker.ts#L178-L203`                                                               | Supplies the natural-language task appended after `$${route.appInvocationToken}`.     |
-| `OPENCLAW_OPENAI_APPS_DEBUG=1`                                            | env           | `extensions/openai-apps/src/app-server-invoker.ts#L70-L89`                                                                 | Mirrors invocation progress/errors to stderr in addition to the debug file.           |
-| `OPENCLAW_SESSION_ID`, `OPENCLAW_CONVERSATION_ID`, `OPENCLAW_SESSION_KEY` | env           | `extensions/openai-apps/src/app-server-invoker.ts#L49-L60`, `extensions/openai-apps/src/app-server-invoker.ts#L75-L89`     | Only affect debug-log context by attaching a conversation/session identifier.         |
+| Name                                                                      | Kind          | Where Read                                                                                               | Effect on Flow                                                                        |
+| ------------------------------------------------------------------------- | ------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `plugins.entries["openai-apps"].config.appServer.command/args`            | config        | `extensions/openai-apps/src/mcp-bridge.ts#L247-L259`, `extensions/openai-apps/src/app-server-invoker.ts` | Chooses the app-server binary and argv used for each tool invocation.                 |
+| `plugins.entries["openai-apps"].config.connectors`                        | config        | `extensions/openai-apps/src/mcp-bridge.ts#L285-L356`                                                     | Indirectly determines whether a tool route exists at all for the requested connector. |
+| `workspaceDir` / current cwd                                              | runtime input | `extensions/openai-apps/src/app-server-invoker.ts`                                                       | Sets the thread cwd and child-process cwd for the invocation session.                 |
+| `args.request`                                                            | request       | `extensions/openai-apps/src/app-server-invoker.ts`                                                       | Supplies the natural-language task appended after `$${route.appInvocationToken}`.     |
+| `OPENCLAW_OPENAI_APPS_DEBUG=1`                                            | env           | `extensions/openai-apps/src/app-server-invoker.ts`                                                       | Mirrors invocation progress/errors to stderr in addition to the debug file.           |
+| `OPENCLAW_SESSION_ID`, `OPENCLAW_CONVERSATION_ID`, `OPENCLAW_SESSION_KEY` | env           | `extensions/openai-apps/src/app-server-invoker.ts`                                                       | Only affect debug-log context by attaching a conversation/session identifier.         |
 
 ### Notable gates
 
 - `cache.routes.get(name)`: fails unknown published tool names before spawning the app server (`extensions/openai-apps/src/mcp-bridge.ts#L239-L245`).
-- `auth.status === "ok"`: required again for each invocation, even if route publication already succeeded (`extensions/openai-apps/src/app-server-invoker.ts#L367-L370`).
-- `readInvocationRequest(...)`: enforces a non-empty `request` string (`extensions/openai-apps/src/app-server-invoker.ts#L178-L184`).
-- `handledServerRequests` policy: user-input requests are auto-answered, elicitations are declined, approval-bearing file/command requests are rejected, and unknown request types are surfaced as unsupported (`extensions/openai-apps/src/app-server-invoker.ts#L482-L558`).
-- `run.completed.turn.status === "completed"` plus `extractTurnText(...) !== null`: both must succeed before `CallToolResult` is returned (`extensions/openai-apps/src/app-server-invoker.ts#L607-L634`).
+- `auth.status === "ok"`: required again for each invocation, even if route publication already succeeded (`extensions/openai-apps/src/app-server-invoker.ts#L375-L379`).
+- `readInvocationRequest(...)`: enforces a non-empty `request` string (`extensions/openai-apps/src/app-server-invoker.ts#L186-L191`).
+- `client.writeConfigValue(...)`: rewrites the derived `apps` config into the shared bundle-owned home before `startThread(...)`, so invocation does not depend on refresh having warmed the home first (`extensions/openai-apps/src/app-server-invoker.ts`).
+- `handledServerRequests` policy: user-input requests are auto-answered, elicitations are declined, approval-bearing file/command requests are rejected, and unknown request types are surfaced as unsupported (`extensions/openai-apps/src/app-server-invoker.ts#L490-L566`).
+- `run.completed.turn.status === "completed"` plus `extractTurnText(...) !== null`: both must succeed before `CallToolResult` is returned (`extensions/openai-apps/src/app-server-invoker.ts#L609-L637`).
 
 ## Sequence diagram
 
@@ -374,7 +379,8 @@ External boundaries:
            v
 +----------------------+
 | resolve auth + cmd   |
-| spawn temp client    |
+| spawn shared-home    |
+| client + write config|
 +----------------------+
            |
            v
@@ -399,7 +405,7 @@ External boundaries:
                                v
                     +----------------------+
                     | return text content  |
-                    | close + cleanup      |
+                    | close client         |
                     +----------------------+
 ```
 
@@ -412,7 +418,7 @@ Metrics:
 Logs:
 
 - `extensions/openai-apps/src/app-server-invoker.ts#L70-L89` appends invocation debug lines to `invocation-debug.log` under `statePaths.rootDir`, and optionally mirrors them to stderr when debug mode is enabled.
-- `extensions/openai-apps/src/app-server-invoker.ts#L439-L455`, `extensions/openai-apps/src/app-server-invoker.ts#L542-L545`, `extensions/openai-apps/src/app-server-invoker.ts#L601-L605`, `extensions/openai-apps/src/app-server-invoker.ts#L639-L640` record stderr output, app-server close events, incoming server requests, turn completion, and invocation failures.
+- `extensions/openai-apps/src/app-server-invoker.ts#L444-L459`, `extensions/openai-apps/src/app-server-invoker.ts#L547-L564`, `extensions/openai-apps/src/app-server-invoker.ts#L609-L639`, `extensions/openai-apps/src/app-server-invoker.ts#L643-L649` record stderr output, app-server close events, incoming server requests, turn completion, final-text success, and invocation failures.
 
 ## Related docs
 
@@ -425,3 +431,4 @@ Logs:
 ## Changelog
 
 - 2026-03-30: Created the `callTool` flow doc from `extensions/openai-apps` code only (019d3ffc-456e-7500-84dc-309b365ada15 - 966651ecb7)
+- 2026-03-30: Updated the invocation flow for the shared bundle-owned `CODEX_HOME` and pre-turn `apps` config rewrite. (019d4036-0bb6-7a20-9dd6-933a0181e5a5 - afed18cb1c)

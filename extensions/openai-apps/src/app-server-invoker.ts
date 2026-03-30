@@ -1,6 +1,5 @@
 import { appendFileSync } from "node:fs";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
@@ -10,7 +9,7 @@ import {
 } from "codex-app-server-sdk";
 import { resolveAppServerCommand } from "./app-server-command.js";
 import type { ChatgptAppsResolvedAuth } from "./auth-projector.js";
-import type { ChatgptAppsConfig } from "./config.js";
+import { buildDerivedAppsConfig, type ChatgptAppsConfig } from "./config.js";
 import type { ChatgptAppsStatePaths } from "./state-paths.js";
 
 type ConfigValueWriteParams = protocol.v2.ConfigValueWriteParams;
@@ -389,10 +388,7 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
     params.statePaths.rootDir,
   );
 
-  await mkdir(params.statePaths.rootDir, { recursive: true });
-  const invocationCodexHomeDir = await mkdtemp(
-    path.join(os.tmpdir(), "openclaw-openai-apps-invoke-"),
-  );
+  await mkdir(params.statePaths.codexHomeDir, { recursive: true });
   const clientFactory =
     params.clientFactory ??
     (async (factoryParams) => {
@@ -437,7 +433,7 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
     cwd: params.workspaceDir,
     env: {
       ...env,
-      CODEX_HOME: invocationCodexHomeDir,
+      CODEX_HOME: params.statePaths.codexHomeDir,
     },
   });
 
@@ -482,11 +478,14 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
     writeDebugLog(env, "app-server login start", params.statePaths.rootDir);
     await client.loginAccount(toLoginParams(auth));
     writeDebugLog(env, "app-server login done", params.statePaths.rootDir);
-    writeDebugLog(
-      env,
-      "app-server config write skipped for invocation session",
-      params.statePaths.rootDir,
-    );
+    writeDebugLog(env, "app-server config write start", params.statePaths.rootDir);
+    await client.writeConfigValue({
+      keyPath: "apps",
+      value: buildDerivedAppsConfig(params.config),
+      mergeStrategy: "replace",
+      expectedVersion: null,
+    });
+    writeDebugLog(env, "app-server config write done", params.statePaths.rootDir);
 
     let serverRequestError: Error | null = null;
     const handledServerRequests = new Set<string>([
@@ -657,6 +656,5 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
     }
     unsubscribeRefresh?.();
     await client.close();
-    await rm(invocationCodexHomeDir, { recursive: true, force: true }).catch(() => {});
   }
 };
