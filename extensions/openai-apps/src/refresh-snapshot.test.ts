@@ -25,7 +25,7 @@ function createConfig(connectors?: Record<string, { enabled: boolean }>): OpenCl
 
 function createCapture(): AppServerRefreshCapture {
   return {
-    inventory: [
+    apps: [
       {
         id: "slack",
         name: "Slack",
@@ -40,27 +40,6 @@ function createCapture(): AppServerRefreshCapture {
         isAccessible: true,
         isEnabled: true,
         pluginDisplayNames: ["Slack"],
-      },
-    ],
-    statuses: [
-      {
-        name: "slack",
-        tools: {
-          slack_send: {
-            name: "slack_send",
-            description: "Send to Slack",
-            inputSchema: {
-              type: "object",
-              properties: {
-                text: { type: "string" },
-              },
-              required: ["text"],
-            },
-          },
-        },
-        resources: [],
-        resourceTemplates: [],
-        authStatus: "oAuth",
       },
     ],
     projectedAt: "2026-03-29T18:00:00.000Z",
@@ -219,6 +198,7 @@ describe("ensureFreshSnapshot", () => {
     });
     const snapshot = await readPersistedSnapshot(statePaths.snapshotPath);
     expect(snapshot?.accountId).toBe("acct_123");
+    expect(snapshot?.connectors.map((connector) => connector.connectorId)).toEqual(["slack"]);
   });
 
   it("times out hung refresh captures instead of blocking indefinitely", async () => {
@@ -248,5 +228,54 @@ describe("ensureFreshSnapshot", () => {
       reason: "refresh",
       message: "Timed out refreshing ChatGPT apps snapshot",
     });
+  });
+
+  it("invalidates an old v1 snapshot and rewrites it as connector metadata", async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chatgpt-apps-"));
+    const env = {
+      OPENCLAW_STATE_DIR: tempRoot,
+      HOME: tempRoot,
+    };
+    const statePaths = resolveChatgptAppsStatePaths(env);
+    await fs.mkdir(path.dirname(statePaths.snapshotPath), { recursive: true });
+    await fs.writeFile(
+      statePaths.snapshotPath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          fetchedAt: "2026-03-29T18:00:00.000Z",
+          projectedAt: "2026-03-29T18:00:00.000Z",
+          accountId: "acct_123",
+          authIdentityKey: "user@example.com",
+          configHash: "config-hash",
+          baseUrlHash: "base-hash",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const captureSnapshot = vi.fn(async () => createCapture());
+    const result = await ensureFreshSnapshot({
+      loadOpenClawConfig: () => createConfig(),
+      env,
+      now: () => new Date("2026-03-30T18:01:00.000Z").getTime(),
+      resolveProjectedAuth: async () => ({
+        status: "ok",
+        accessToken: "access-token",
+        accountId: "acct_123",
+        planType: null,
+        profileId: "openai-codex:default",
+        identity: { email: "user@example.com", profileName: "user@example.com" },
+      }),
+      captureSnapshot,
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.status === "ok" ? result.source : "unexpected").toBe("refresh");
+    expect(captureSnapshot).toHaveBeenCalledTimes(1);
+    const snapshot = await readPersistedSnapshot(statePaths.snapshotPath);
+    expect(snapshot?.version).toBe(2);
+    expect(snapshot?.connectors.map((connector) => connector.connectorId)).toEqual(["slack"]);
   });
 });

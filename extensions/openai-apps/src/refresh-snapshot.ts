@@ -3,6 +3,7 @@ import { captureAppServerSnapshot, type AppServerRefreshCapture } from "./app-se
 import type { ChatgptAppsResolvedAuth } from "./auth-projector.js";
 import { resolveChatgptAppsProjectedAuth } from "./auth-projector.js";
 import { hashChatgptAppsConfig, hashChatgptBaseUrl, resolveChatgptAppsConfig } from "./config.js";
+import { deriveConnectorRecordsFromApps } from "./connector-record.js";
 import {
   buildAuthIdentityKey,
   isSnapshotFresh,
@@ -185,8 +186,7 @@ export async function ensureFreshSnapshot(params: {
       authIdentityKey: buildAuthIdentityKey(auth.identity),
       configHash: hashChatgptAppsConfig(config),
       baseUrlHash: hashChatgptBaseUrl(),
-      inventory: capture.inventory,
-      statuses: capture.statuses,
+      connectors: deriveConnectorRecordsFromApps(capture.apps),
     };
     await writePersistedSnapshot({
       statePaths,

@@ -112,11 +112,6 @@ function createMockClient(
       authToken: null,
       requiresOpenaiAuth: false,
     }),
-    listMcpServerStatus: async () =>
-      ({
-        data: [],
-        nextCursor: null,
-      }) as unknown as protocol.v2.ListMcpServerStatusResponse,
     writeConfigValue: async () => ({
       status: "ok",
       version: "1",
@@ -200,7 +195,6 @@ describe("invokeViaAppServer", () => {
         publishedName: "chatgpt_app_gmail",
         appName: "Gmail",
         appInvocationToken: "gmail",
-        availableToolNames: ["gmail_search_emails", "gmail_read_email"],
       },
       args: { request: "Summarize my recent emails" },
       statePaths,
@@ -323,7 +317,6 @@ describe("invokeViaAppServer", () => {
           publishedName: "chatgpt_app_gmail",
           appName: "Gmail",
           appInvocationToken: "gmail",
-          availableToolNames: [],
         },
         args: { request: "Summarize my recent emails" },
         statePaths,
@@ -354,7 +347,6 @@ describe("invokeViaAppServer", () => {
           publishedName: "chatgpt_app_gmail",
           appName: "Gmail",
           appInvocationToken: "gmail",
-          availableToolNames: [],
         },
         args: {},
         statePaths,
@@ -385,7 +377,6 @@ describe("invokeViaAppServer", () => {
           publishedName: "chatgpt_app_gmail",
           appName: "Gmail",
           appInvocationToken: "gmail",
-          availableToolNames: [],
         },
         args: { request: "Summarize my recent emails" },
         statePaths,
@@ -438,7 +429,6 @@ describe("invokeViaAppServer", () => {
           publishedName: "chatgpt_app_gmail",
           appName: "Gmail",
           appInvocationToken: "gmail",
-          availableToolNames: [],
         },
         args: { request: "Summarize my recent emails" },
         statePaths,
@@ -455,15 +445,8 @@ describe("invokeViaAppServer", () => {
     ).rejects.toThrow("App invocation requested unsupported server request: item/tool/call");
   });
 
-  it("does not spend time listing mcp inventory during a normal tool invocation", async () => {
-    const listMcpServerStatus = vi.fn<AppServerInvocationClient["listMcpServerStatus"]>(
-      async () =>
-        ({
-          data: [],
-          nextCursor: null,
-        }) as unknown as protocol.v2.ListMcpServerStatusResponse,
-    );
-    const client = createMockClient({ listMcpServerStatus });
+  it("keeps invocation routing independent from refresh-only inventory metadata", async () => {
+    const client = createMockClient();
 
     await expect(
       invokeViaAppServer({
@@ -474,7 +457,6 @@ describe("invokeViaAppServer", () => {
           publishedName: "chatgpt_app_gmail",
           appName: "Gmail",
           appInvocationToken: "gmail",
-          availableToolNames: ["gmail_search_emails", "gmail_read_email"],
         },
         args: { request: "Summarize my recent emails" },
         statePaths,
@@ -491,6 +473,5 @@ describe("invokeViaAppServer", () => {
     ).resolves.toEqual({
       content: [{ type: "text", text: "ok" }],
     });
-    expect(listMcpServerStatus).not.toHaveBeenCalled();
   });
 });

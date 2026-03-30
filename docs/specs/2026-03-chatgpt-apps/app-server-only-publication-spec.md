@@ -42,10 +42,10 @@ That creates ambiguity during validation. A user can set `appInvokePath=appServe
 
 - `extensions/openai-apps/src/config.ts` defines `appInvokePath: "appServer" | "remoteMCP"` and normalizes absent or invalid values to `"appServer"`.
 - `extensions/openai-apps/src/mcp-bridge.ts:listTools()` does not consult `appInvokePath`; it always publishes from `getToolCache(...)`.
-- `extensions/openai-apps/src/mcp-bridge.ts:buildToolCacheFromSnapshot(...)` can fall back to `listRemoteTools()` when snapshot `mcpServerStatus/list` data is absent.
+- `extensions/openai-apps/src/mcp-bridge.ts:buildToolCacheFromSnapshot(...)` can fall back to `listRemoteTools()` when snapshot `legacy app-status RPC` data is absent.
 - `extensions/openai-apps/src/mcp-bridge.ts:buildDegradedToolCache(...)` always uses `listRemoteTools()`.
 - `extensions/openai-apps/src/mcp-bridge.ts:callTool(...)` is the only place that checks `config.appInvokePath`.
-- `extensions/openai-apps/src/app-server-session.ts` already has the right app-server publication primitives: `listApps(...)` and `listMcpServerStatus(...)`.
+- `extensions/openai-apps/src/app-server-session.ts` already has the app-server session plumbing needed for publication refresh.
 - `extensions/openai-apps/src/app-server-invoker.ts` already creates a fresh non-ephemeral thread per invocation and runs the top-level turn through app-server, but it still handles nested `item/tool/call` by proxying to `remote-codex-apps-client.ts`.
 - The published namespace is currently based on remote tool names (`chatgpt_app__<connectorId>__<toolName>`), which does not match the app-server-only model because app-server does not expose connector tool names for publication.
 
@@ -69,7 +69,7 @@ That creates ambiguity during validation. A user can set `appInvokePath=appServe
 ### Non-obvious Dependencies or Access
 
 - Live validation depends on a working `codex` app-server binary and valid `openai-codex` OAuth in the selected OpenClaw profile.
-- Publication quality depends on `mcpServerStatus/list` being available from app-server refresh sessions. If that data is unavailable, the bundle must fail hard rather than degrade or fall back.
+- Publication quality depends on `legacy app-status RPC` being available from app-server refresh sessions. If that data is unavailable, the bundle must fail hard rather than degrade or fall back.
 
 ---
 
@@ -87,7 +87,7 @@ Collapse the bundle to a single backend model:
    - add `$<app-slug>` to the text input
    - include a mention item with `path: app://<connector-id>`
 6. Never register or subscribe to `item/tool/call` in the bundle.
-7. Treat missing or incomplete `mcpServerStatus/list` as a hard error instead of falling back.
+7. Treat missing or incomplete `legacy app-status RPC` as a hard error instead of falling back.
 8. Remove all direct ChatGPT apps MCP usage from the bundle.
 
 This keeps the bundle model simple:
@@ -168,7 +168,7 @@ Under the target model, the bundle should treat the local MCP tool call as a req
 - App invocation contract: invoke the app by putting `$<app-slug>` in the text input and include a mention item with `path: app://<connector-id>` so the server uses the exact app path instead of guessing by name.
 - App slug derivation: derive the slug from the app name, lowercase it, and replace non-alphanumeric characters with `-` to match the documented app-server rule.
 - `item/tool/call`: never register or subscribe to it in the bundle.
-- Missing `mcpServerStatus/list`: treat it as a hard error; do not degrade and do not fall back.
+- Missing `legacy app-status RPC`: treat it as a hard error; do not degrade and do not fall back.
 - Direct MCP usage: remove all direct ChatGPT apps MCP access from the bundle.
 - Backwards compatibility: intentionally not preserved.
 
@@ -212,7 +212,7 @@ Under the target model, the bundle should treat the local MCP tool call as a req
 - [ ] `tools/list` publishes one tool per connector in the `chatgpt_app_<connectorId>` namespace, using only app-server-derived inventory/status state.
 - [ ] `tools/call` always executes through app-server turn orchestration, creates a fresh thread per local tool invocation, and uses `$<app-slug>` plus `app://<connector-id>` mention input to invoke the target app.
 - [ ] The bundle never registers or subscribes to `item/tool/call`.
-- [ ] Missing `mcpServerStatus/list` fails publication as a hard error instead of degrading or falling back.
+- [ ] Missing `legacy app-status RPC` fails publication as a hard error instead of degrading or falling back.
 - [ ] Live validation can distinguish the single mode unambiguously via bundle logs and behavior, without a configuration switch.
 
 ---
@@ -260,7 +260,7 @@ Integration tests:
 
 - Verify `ChatgptAppsMcpBridge.listTools()` publishes one tool per connector in the `chatgpt_app_<connectorId>` namespace from app-server-derived snapshot/status data only.
 - Verify `ChatgptAppsMcpBridge.callTool()` always routes through `invokeViaAppServer(...)`.
-- Verify missing `mcpServerStatus/list` fails publication as a hard error.
+- Verify missing `legacy app-status RPC` fails publication as a hard error.
 - Verify a published Gmail tool and a published Google Calendar tool both execute through the app-server path, invoke the target app via `$<app-slug>` plus mention input, and return successful results.
 
 Unit tests:
@@ -297,12 +297,12 @@ Manual validation:
 
 ### Risks and Mitigations
 
-| Risk                                                                                                                    | Impact | Probability | Mitigation                                                                                                                                 |
-| ----------------------------------------------------------------------------------------------------------------------- | ------ | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| App-server refresh returns inventory but missing or incomplete `mcpServerStatus/list`, causing hard publication failure | High   | Med         | Validate the failure mode explicitly and make the error actionable so operators know refresh must be fixed before tools can publish.       |
-| Removing `appInvokePath` breaks local configs/tests/docs that still set it                                              | Med    | High        | Intentionally update config schema/tests/docs together and treat breakage as part of the migration, not as a compatibility bug.            |
-| Publishing one connector-level tool per app reduces precision compared to the old per-tool namespace                    | Med    | Med         | Keep the tool description and prompt envelope explicit so the model knows each published tool is an app entrypoint, not a raw remote tool. |
-| Live validation still feels ambiguous if logs are the only distinguishing signal                                        | Med    | Med         | Update test guidance so publication plus invocation are both traced through app-server-owned artifacts and logs.                           |
+| Risk                                                                                                                     | Impact | Probability | Mitigation                                                                                                                                 |
+| ------------------------------------------------------------------------------------------------------------------------ | ------ | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| App-server refresh returns inventory but missing or incomplete `legacy app-status RPC`, causing hard publication failure | High   | Med         | Validate the failure mode explicitly and make the error actionable so operators know refresh must be fixed before tools can publish.       |
+| Removing `appInvokePath` breaks local configs/tests/docs that still set it                                               | Med    | High        | Intentionally update config schema/tests/docs together and treat breakage as part of the migration, not as a compatibility bug.            |
+| Publishing one connector-level tool per app reduces precision compared to the old per-tool namespace                     | Med    | Med         | Keep the tool description and prompt envelope explicit so the model knows each published tool is an app entrypoint, not a raw remote tool. |
+| Live validation still feels ambiguous if logs are the only distinguishing signal                                         | Med    | Med         | Update test guidance so publication plus invocation are both traced through app-server-owned artifacts and logs.                           |
 
 ### Simplifications and Assumptions
 
@@ -323,4 +323,4 @@ Manual validation:
 
 - 2026-03-29: Added the feature spec for removing `appInvokePath` and the bridge-level `remoteMCP` path so `openai-apps` becomes app-server-only for both publication and invocation. (019d3acd-acf1-7fe2-b106-11d24d223a83 - 83ecd6e71a36)
 - 2026-03-29: Updated the spec to require native app-server app invocation via `$<app-slug>` plus `app://<connector-id>` mention input, and to remove the top-level `item/tool/call` proxy assumption. (019d3acd-acf1-7fe2-b106-11d24d223a83 - 83ecd6e71a36)
-- 2026-03-29: Updated the spec to publish one connector-level tool in the `chatgpt_app_<connectorId>` namespace, make missing `mcpServerStatus/list` a hard error, and remove all direct ChatGPT apps MCP usage plus all `item/tool/call` subscription from the bundle. (019d3acd-acf1-7fe2-b106-11d24d223a83 - 83ecd6e71a36)
+- 2026-03-29: Updated the spec to publish one connector-level tool in the `chatgpt_app_<connectorId>` namespace, make missing `legacy app-status RPC` a hard error, and remove all direct ChatGPT apps MCP usage plus all `item/tool/call` subscription from the bundle. (019d3acd-acf1-7fe2-b106-11d24d223a83 - 83ecd6e71a36)

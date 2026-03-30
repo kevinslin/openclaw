@@ -191,12 +191,12 @@ When the bundle refreshes connector state, it should:
 
 - call paginated `app/list` until `nextCursor == null`
 - treat the returned `AppInfo[]` as the canonical connector inventory
-- optionally collect `mcpServerStatus/list` in the same refresh pass so the
+- optionally collect `legacy app-status RPC` in the same refresh pass so the
   bridge can keep connector-to-tool metadata next to the inventory snapshot
 - store the final snapshot in a bundle-owned cache file
 
 `app/list` answers which connectors are visible, accessible, and enabled.
-`mcpServerStatus/list` is an implementation detail for tool metadata, not the
+`legacy app-status RPC` is an implementation detail for tool metadata, not the
 source of truth for app inventory.
 
 ### 5) Mirror OpenClaw enablement into an isolated sidecar config
@@ -290,7 +290,7 @@ Recommended location:
 Source:
 
 - `app/list`
-- optional `mcpServerStatus/list`
+- optional `legacy app-status RPC`
 
 Contents:
 
@@ -409,7 +409,7 @@ This design adds new tools, but it does not add a new trust model.
 4. Bridge projects auth with `account/login/start(chatgptAuthTokens)`.
 5. Bridge writes the derived sidecar config for connector enablement.
 6. Bridge calls paginated `app/list`.
-7. Bridge optionally calls `mcpServerStatus/list` in the same refresh pass.
+7. Bridge optionally calls `legacy app-status RPC` in the same refresh pass.
 8. Bridge atomically writes the refreshed connector snapshot cache.
 9. Bridge tears down the short-lived app-server session.
 
@@ -520,7 +520,7 @@ Tasks:
 - project OpenClaw auth with `chatgptAuthTokens`
 - write isolated derived sidecar config before `app/list`
 - implement paginated `app/list`
-- optionally capture `mcpServerStatus/list` in the same refresh pass
+- optionally capture `legacy app-status RPC` in the same refresh pass
 - persist bundle-owned connector snapshot cache with TTL and invalidation rules
 - rewrite tool names into the local namespace
 
@@ -667,7 +667,7 @@ Manual checks:
 
 1. Is an operator/debug-only hard-refresh flag sufficient, or do we want a
    model-visible refresh surface later?
-2. Should `mcpServerStatus/list` remain part of the persisted snapshot, or
+2. Should `legacy app-status RPC` remain part of the persisted snapshot, or
    should the bridge rebuild tool metadata from another source on every refresh?
 3. Do we want to add a best-effort file lock for cross-process refresh
    deduplication after the initial dogfood milestone?

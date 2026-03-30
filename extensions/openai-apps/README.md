@@ -9,7 +9,7 @@ This bundle:
 - publishes one local MCP tool per enabled ChatGPT app connector
 - uses `codex app-server` as the single authority for both tool publication and invocation
 - reads OpenClaw-rooted `openai-codex` auth and projects it into the spawned app-server session
-- caches connector inventory in the plugin runtime state directory and refreshes it on demand
+- caches canonical connector records derived from `app/list` in the plugin runtime state directory and refreshes them on demand
 
 Published tool names use the `chatgpt_app_<connectorId>` namespace. Each tool accepts a single natural-language `request` string and executes the app on a fresh app-server thread.
 
@@ -134,3 +134,70 @@ You can combine wildcard enablement with explicit disables:
 - `linking.waitTimeoutMs` / `linking.pollIntervalMs`: Tune how long the bundle waits for that link flow to complete.
 
 The ChatGPT apps endpoint is internal to the bundle and is not configurable.
+
+## Snapshot Shape
+
+The persisted snapshot under `plugin-runtimes/openai-apps/connectors.snapshot.json` stores
+connector-level records derived from `app/list`. It does not persist raw
+`inventory` or any status payload.
+
+Example:
+
+```json
+{
+  "version": 2,
+  "fetchedAt": "2026-03-30T18:00:00.000Z",
+  "projectedAt": "2026-03-30T18:00:00.000Z",
+  "accountId": "acct_123",
+  "authIdentityKey": "user@example.com",
+  "configHash": "config-hash",
+  "baseUrlHash": "base-hash",
+  "connectors": [
+    {
+      "connectorId": "gmail",
+      "appId": "asdk_app_gmail",
+      "appName": "Gmail",
+      "publishedName": "chatgpt_app_gmail",
+      "appInvocationToken": "gmail",
+      "description": "Read and send Gmail messages.",
+      "pluginDisplayNames": ["Gmail"],
+      "isAccessible": true,
+      "isEnabled": true
+    }
+  ]
+}
+```
+
+## Appendix
+
+### Calls to App Server
+
+Setting the developer message
+
+```js
+[
+      {
+        "approvalPolicy": "never",
+        "developerInstructions": "You are servicing one OpenClaw connector tool call for Gmail.  Use the app mentioned in the user input instead of browsing or relying on unrelated tools.  Do not use browser, shell, file, web, image, memory, or unrelated tools.  Do not ask follow-up questions.  Do not fabricate success.  Return only JSON matching the schema {"status":"success|failure","result":"string","error":"string"}.", "ephemeral": false,
+        "experimentalRawEvents": false,
+        "persistExtendedHistory": true,
+      },
+  ]
+```
+
+Example call
+
+```js
+[
+  {
+    text: "$gmail Summarize my recent emails",
+    text_elements: [],
+    type: "text",
+  },
+  {
+    name: "Gmail",
+    path: "app://asdk_app_gmail",
+    type: "mention",
+  },
+];
+```

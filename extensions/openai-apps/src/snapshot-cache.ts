@@ -1,13 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { protocol } from "codex-app-server-sdk";
+import {
+  assertValidPersistedConnectorRecord,
+  isPersistedConnectorRecord,
+  type PersistedConnectorRecord,
+} from "./connector-record.js";
 import type { ChatgptAppsStatePaths } from "./state-paths.js";
 
-type AppInfo = protocol.v2.AppInfo;
-type McpServerStatus = protocol.v2.McpServerStatus;
-
-export const SNAPSHOT_VERSION = 1;
+export const SNAPSHOT_VERSION = 2;
 export const SNAPSHOT_TTL_MS = 24 * 60 * 60 * 1000;
 
 export type PersistedConnectorSnapshot = {
@@ -18,8 +19,7 @@ export type PersistedConnectorSnapshot = {
   authIdentityKey: string;
   configHash: string;
   baseUrlHash: string;
-  inventory: AppInfo[];
-  statuses: McpServerStatus[];
+  connectors: PersistedConnectorRecord[];
 };
 
 export type RefreshDebugState = {
@@ -61,14 +61,16 @@ export function computeSnapshotKey(snapshot: PersistedConnectorSnapshot): string
         accountId: snapshot.accountId,
         configHash: snapshot.configHash,
         baseUrlHash: snapshot.baseUrlHash,
-        inventory: snapshot.inventory.map((app) => ({
-          id: app.id,
-          isAccessible: app.isAccessible,
-          isEnabled: app.isEnabled,
-        })),
-        statuses: snapshot.statuses.map((status) => ({
-          name: status.name,
-          tools: Object.keys(status.tools ?? {}).sort(),
+        connectors: snapshot.connectors.map((connector) => ({
+          connectorId: connector.connectorId,
+          appId: connector.appId,
+          appName: connector.appName,
+          publishedName: connector.publishedName,
+          appInvocationToken: connector.appInvocationToken,
+          description: connector.description,
+          pluginDisplayNames: connector.pluginDisplayNames,
+          isAccessible: connector.isAccessible,
+          isEnabled: connector.isEnabled,
         })),
       }),
     )
@@ -91,10 +93,15 @@ export async function readPersistedSnapshot(
       typeof raw.authIdentityKey !== "string" ||
       typeof raw.configHash !== "string" ||
       typeof raw.baseUrlHash !== "string" ||
-      !Array.isArray(raw.inventory) ||
-      !Array.isArray(raw.statuses)
+      !Array.isArray(raw.connectors)
     ) {
       return null;
+    }
+    if (!raw.connectors.every((entry) => isPersistedConnectorRecord(entry))) {
+      return null;
+    }
+    for (const connector of raw.connectors) {
+      assertValidPersistedConnectorRecord(connector);
     }
     return raw as PersistedConnectorSnapshot;
   } catch {

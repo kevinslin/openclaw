@@ -201,16 +201,11 @@ import os from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { shouldExcludeConnectorId } from "./extensions/openai-apps/src/connector-record.js";
 import { resolveChatgptAppsConfig } from "./extensions/openai-apps/src/config.js";
 import { resolveChatgptAppsStatePaths } from "./extensions/openai-apps/src/state-paths.js";
 
 const requiredPublishedTools = JSON.parse(process.env.REQUIRED_PUBLISHED_TOOLS_JSON ?? "[]");
-
-const EXCLUDED_CONNECTOR_IDS = new Set([
-  "collab",
-  "connector_openai_general_agent",
-  "general_agent",
-]);
 
 function normalizeConnectorKey(value) {
   return value
@@ -219,37 +214,6 @@ function normalizeConnectorKey(value) {
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "")
     .replace(/_+/g, "_");
-}
-
-function looksLikeOpaqueAppId(value) {
-  return value.startsWith("connector_") || value.startsWith("asdk_app_");
-}
-
-function deriveConnectorKeysFromApp(app) {
-  const candidates = new Set();
-
-  if (!looksLikeOpaqueAppId(app.id)) {
-    const normalizedId = normalizeConnectorKey(app.id);
-    if (normalizedId) {
-      candidates.add(normalizedId);
-    }
-  }
-
-  for (const value of [app.name, ...(app.pluginDisplayNames ?? [])]) {
-    const normalized = normalizeConnectorKey(String(value ?? ""));
-    if (normalized) {
-      candidates.add(normalized);
-    }
-  }
-
-  return [...candidates];
-}
-
-function shouldExcludeConnectorId(connectorId) {
-  if (!connectorId) {
-    return false;
-  }
-  return EXCLUDED_CONNECTOR_IDS.has(normalizeConnectorKey(connectorId));
 }
 
 function buildConnectorConfigState(configuredConnectors) {
@@ -283,50 +247,45 @@ function buildConnectorConfigState(configuredConnectors) {
   return { wildcardEnabled, enabledConnectorIds, disabledConnectorIds };
 }
 
-function buildExpectedPublishedTools(inventory, configuredConnectors) {
+function buildExpectedPublishedTools(connectors, configuredConnectors) {
   const { wildcardEnabled, enabledConnectorIds, disabledConnectorIds } =
     buildConnectorConfigState(configuredConnectors);
   const expected = [];
-  const seenConnectorIds = new Set();
   const hasExplicitConnectors = Object.keys(configuredConnectors).length > 0;
 
-  for (const app of inventory) {
-    if (!app.isAccessible || !app.isEnabled) {
+  for (const connector of connectors) {
+    if (!connector.isAccessible || !connector.isEnabled) {
       continue;
     }
 
-    for (const connectorId of deriveConnectorKeysFromApp(app)) {
-      if (
-        shouldExcludeConnectorId(connectorId) ||
-        disabledConnectorIds.has(connectorId) ||
-        seenConnectorIds.has(connectorId)
-      ) {
-        continue;
-      }
+    if (
+      shouldExcludeConnectorId(connector.connectorId) ||
+      disabledConnectorIds.has(connector.connectorId)
+    ) {
+      continue;
+    }
 
-      if (!hasExplicitConnectors || wildcardEnabled || enabledConnectorIds.has(connectorId)) {
-        seenConnectorIds.add(connectorId);
-        expected.push(`chatgpt_app_${connectorId}`);
-      }
+    if (!hasExplicitConnectors || wildcardEnabled || enabledConnectorIds.has(connector.connectorId)) {
+      expected.push(connector.publishedName);
     }
   }
 
   return expected.sort();
 }
 
-function summarizeReturnedApps(inventory) {
-  return inventory
-    .filter((app) => app.isAccessible && app.isEnabled)
-    .map((app) => ({
-      id: app.id,
-      name: app.name,
-      connectorIds: deriveConnectorKeysFromApp(app)
-        .filter((connectorId) => !shouldExcludeConnectorId(connectorId))
-        .sort(),
+function summarizeReturnedConnectors(connectors) {
+  return connectors
+    .map((connector) => ({
+      connectorId: connector.connectorId,
+      appId: connector.appId,
+      appName: connector.appName,
+      publishedName: connector.publishedName,
+      isAccessible: connector.isAccessible,
+      isEnabled: connector.isEnabled,
     }))
     .sort((a, b) => {
-      const left = `${a.name}:${a.id}`;
-      const right = `${b.name}:${b.id}`;
+      const left = `${a.appName}:${a.appId}`;
+      const right = `${b.appName}:${b.appId}`;
       return left.localeCompare(right);
     });
 }
@@ -372,7 +331,7 @@ try {
 const statePaths = resolveChatgptAppsStatePaths(process.env);
 const snapshot = JSON.parse(await readFile(statePaths.snapshotPath, "utf8"));
 const expectedPublishedTools = buildExpectedPublishedTools(
-  snapshot.inventory ?? [],
+  snapshot.connectors ?? [],
   resolvedConfig.connectors ?? {},
 );
 
@@ -402,7 +361,7 @@ console.log(
       toolCount: actualPublishedTools.length,
       requiredPublishedTools,
       publishedTools: actualPublishedTools,
-      returnedApps: summarizeReturnedApps(snapshot.inventory ?? []),
+      returnedConnectors: summarizeReturnedConnectors(snapshot.connectors ?? []),
     },
     null,
     2,

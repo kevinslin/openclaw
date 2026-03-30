@@ -33,15 +33,15 @@ const statePaths: ChatgptAppsStatePaths = {
   refreshDebugPath: "/tmp/openclaw-chatgpt-apps/refresh-debug.json",
 };
 
-describe("captureAppServerSnapshot", () => {
+describe("app-server session helpers", () => {
   it("logs in, writes config, and calls the requested app-server method", async () => {
     const events: string[] = [];
 
     const result = await callAppServerMethod({
       config,
       statePaths,
-      method: "mcpServerStatus/list",
-      methodParams: { cursor: null },
+      method: "app/list",
+      methodParams: { cursor: null, forceRefetch: true },
       resolveProjectedAuth: async () => ({
         status: "ok",
         accessToken: "access-token",
@@ -76,10 +76,6 @@ describe("captureAppServerSnapshot", () => {
           data: [],
           nextCursor: null,
         }),
-        listMcpServerStatus: async () => ({
-          data: [],
-          nextCursor: null,
-        }),
         writeConfigValue: async (): Promise<ConfigWriteResponse> => {
           events.push("writeConfigValue");
           return {
@@ -103,12 +99,109 @@ describe("captureAppServerSnapshot", () => {
       "initializeSession",
       "loginAccount",
       "writeConfigValue",
-      'request:mcpServerStatus/list:{"cursor":null}',
+      'request:app/list:{"cursor":null,"forceRefetch":true}',
       "close",
     ]);
   });
 
-  it("fails when mcpServerStatus/list is unavailable", async () => {
+  it("captures paginated app/list results without requiring status calls", async () => {
+    const events: string[] = [];
+
+    const result = await captureAppServerSnapshot({
+      config,
+      statePaths,
+      now: () => new Date("2026-03-30T18:00:00.000Z").getTime(),
+      resolveProjectedAuth: async () => ({
+        status: "ok",
+        accessToken: "access-token",
+        accountId: "acct_123",
+        planType: null,
+        profileId: "openai-codex:default",
+        identity: { email: "user@example.com", profileName: "user@example.com" },
+      }),
+      clientFactory: async () => {
+        let page = 0;
+        return {
+          initializeSession: async () => {},
+          handleChatgptAuthTokensRefresh: () => () => {},
+          request: async () => null,
+          loginAccount: async (): Promise<LoginAccountResponse> => ({
+            type: "chatgptAuthTokens",
+          }),
+          readAccount: async (): Promise<GetAccountResponse> => ({
+            account: null,
+            requiresOpenaiAuth: false,
+          }),
+          getAuthStatus: async (): Promise<GetAuthStatusResponse> => ({
+            authMethod: "chatgpt",
+            authToken: null,
+            requiresOpenaiAuth: false,
+          }),
+          listApps: async () => {
+            page += 1;
+            events.push(`listApps:${page}`);
+            if (page === 1) {
+              return {
+                data: [
+                  {
+                    id: "gmail",
+                    name: "Gmail",
+                    description: null,
+                    logoUrl: null,
+                    logoUrlDark: null,
+                    distributionChannel: null,
+                    branding: null,
+                    appMetadata: null,
+                    labels: null,
+                    installUrl: null,
+                    isAccessible: true,
+                    isEnabled: true,
+                    pluginDisplayNames: ["Gmail"],
+                  },
+                ],
+                nextCursor: "cursor-2",
+              };
+            }
+            return {
+              data: [
+                {
+                  id: "linear",
+                  name: "Linear",
+                  description: null,
+                  logoUrl: null,
+                  logoUrlDark: null,
+                  distributionChannel: null,
+                  branding: null,
+                  appMetadata: null,
+                  labels: null,
+                  installUrl: null,
+                  isAccessible: true,
+                  isEnabled: true,
+                  pluginDisplayNames: ["Linear"],
+                },
+              ],
+              nextCursor: null,
+            };
+          },
+          writeConfigValue: async (): Promise<ConfigWriteResponse> => ({
+            status: "ok",
+            version: "1",
+            filePath: "/tmp/openclaw-chatgpt-apps/config.toml",
+            overriddenMetadata: null,
+          }),
+          close: async () => {
+            events.push("close");
+          },
+        };
+      },
+    });
+
+    expect(result.apps.map((app) => app.id)).toEqual(["gmail", "linear"]);
+    expect(result.projectedAt).toBe("2026-03-30T18:00:00.000Z");
+    expect(events).toEqual(["listApps:1", "listApps:2", "close"]);
+  });
+
+  it("closes the client when app/list fails", async () => {
     const closeCalls: string[] = [];
 
     await expect(
@@ -139,28 +232,8 @@ describe("captureAppServerSnapshot", () => {
             authToken: null,
             requiresOpenaiAuth: false,
           }),
-          listApps: async () => ({
-            data: [
-              {
-                id: "gmail",
-                name: "Gmail",
-                description: null,
-                logoUrl: null,
-                logoUrlDark: null,
-                distributionChannel: null,
-                branding: null,
-                appMetadata: null,
-                labels: null,
-                installUrl: null,
-                isAccessible: true,
-                isEnabled: true,
-                pluginDisplayNames: ["Gmail"],
-              },
-            ],
-            nextCursor: null,
-          }),
-          listMcpServerStatus: async () => {
-            throw new Error("status unavailable");
+          listApps: async () => {
+            throw new Error("app list unavailable");
           },
           writeConfigValue: async (): Promise<ConfigWriteResponse> => ({
             status: "ok",
@@ -173,7 +246,7 @@ describe("captureAppServerSnapshot", () => {
           },
         }),
       }),
-    ).rejects.toThrow("status unavailable");
+    ).rejects.toThrow("app list unavailable");
 
     expect(closeCalls).toEqual(["closed"]);
   });

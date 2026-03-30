@@ -21,7 +21,7 @@ only accessible and enabled tools from that snapshot.
 - Implement auth projection through `chatgptAuthTokens` from OpenClaw-owned
   `openai-codex` auth.
 - Write the isolated derived sidecar config before refresh work.
-- Implement paginated `app/list` refresh and optional `mcpServerStatus/list`
+- Implement paginated `app/list` refresh and optional `legacy app-status RPC`
   capture in the same pass.
 - Persist the connector snapshot with TTL and invalidation rules.
 - Implement bundle-side `tools/list` publication from the persisted snapshot.
@@ -102,7 +102,7 @@ real lazy refresh entrypoint. When the bridge needs a snapshot and none is
 fresh, it loads OpenClaw config, resolves `openai-codex` auth, projects
 `chatgptAuthTokens` into a short-lived `codex app-server` session, writes the
 derived sidecar config, runs paginated `app/list`, optionally captures
-`mcpServerStatus/list`, persists the resulting snapshot, and then publishes
+`legacy app-status RPC`, persists the resulting snapshot, and then publishes
 rewritten local tool definitions from that persisted state.
 
 The key simplification is to keep publication entirely snapshot-driven:
@@ -157,14 +157,14 @@ Milestone 2 must make the following runtime contracts explicit:
   explicit hard-refresh bypass when no valid snapshot is available.
 - Refresh order: config load -> auth resolution -> sidecar spawn -> auth
   projection -> derived sidecar config write -> `app/list` -> optional
-  `mcpServerStatus/list` -> snapshot persistence -> sidecar teardown.
+  `legacy app-status RPC` -> snapshot persistence -> sidecar teardown.
 - Cache ownership: the bundle is the only reader and writer of
   `connectors.snapshot.json`.
 - Publication filter: only connectors whose `AppInfo` is accessible and enabled
   are published.
 - Tool naming: Milestone 2 already adopts the final local namespace
   `chatgpt_app__<connectorId>__<toolName>`.
-- Partial metadata policy: `mcpServerStatus/list` is required for publication.
+- Partial metadata policy: `legacy app-status RPC` is required for publication.
   Missing or incomplete status data is a hard publication failure rather than a
   partial publish.
 
@@ -210,7 +210,7 @@ Milestone 2 must make the following runtime contracts explicit:
 
 - [ ] Write the derived sidecar config before refresh.
 - [ ] Implement paginated `app/list`.
-- [ ] Optionally capture `mcpServerStatus/list` in the same refresh pass.
+- [ ] Optionally capture `legacy app-status RPC` in the same refresh pass.
 - [ ] Persist the connector snapshot atomically with freshness metadata.
 - [ ] Define the `ensureFreshSnapshot()` success and failure result shapes and
       encode "no valid snapshot yet" distinctly from hard refresh failure.
@@ -290,7 +290,7 @@ Manual validation:
 
 ### Open Items
 
-- [ ] Decide whether `mcpServerStatus/list` should be required in the persisted
+- [ ] Decide whether `legacy app-status RPC` should be required in the persisted
       snapshot or optional when unavailable. - Answer: not required.
 - [ ] Decide whether snapshot freshness metadata needs a version field distinct
       from `fetchedAt`.

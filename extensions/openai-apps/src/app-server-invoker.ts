@@ -19,8 +19,6 @@ type GetAuthStatusResponse = protocol.GetAuthStatusResponse;
 type GetAccountResponse = protocol.v2.GetAccountResponse;
 type LoginAccountParams = protocol.v2.LoginAccountParams;
 type LoginAccountResponse = protocol.v2.LoginAccountResponse;
-type ListMcpServerStatusParams = protocol.v2.ListMcpServerStatusParams;
-type ListMcpServerStatusResponse = protocol.v2.ListMcpServerStatusResponse;
 type ThreadReadResponse = protocol.v2.ThreadReadResponse;
 type ThreadStartResponse = protocol.v2.ThreadStartResponse;
 type TurnCompletedNotification = protocol.v2.TurnCompletedNotification;
@@ -96,7 +94,6 @@ export type AppServerInvocationRoute = {
   publishedName: string;
   appName: string;
   appInvocationToken: string;
-  availableToolNames: string[];
 };
 
 type ProjectedAuthResolver = () => Promise<ChatgptAppsResolvedAuth>;
@@ -122,7 +119,6 @@ export type AppServerInvocationClient = {
     includeToken: boolean | null;
     refreshToken: boolean | null;
   }): Promise<GetAuthStatusResponse>;
-  listMcpServerStatus(params: ListMcpServerStatusParams): Promise<ListMcpServerStatusResponse>;
   writeConfigValue(params: ConfigValueWriteParams): Promise<ConfigWriteResponse>;
   startThread(params: ThreadStartParams): Promise<ThreadStartResponse>;
   runTurn(
@@ -412,7 +408,6 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
         loginAccount: (loginParams) => client.loginAccount(loginParams),
         readAccount: (readParams) => client.readAccount(readParams),
         getAuthStatus: (statusParams) => client.getAuthStatus(statusParams),
-        listMcpServerStatus: (listParams) => client.listMcpServerStatus(listParams),
         writeConfigValue: (writeParams) => client.writeConfigValue(writeParams),
         startThread: (startParams) => client.startThread(startParams),
         runTurn: (turnParams, options) => client.runTurn(turnParams, options),

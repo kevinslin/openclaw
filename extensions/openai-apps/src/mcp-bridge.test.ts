@@ -1,9 +1,9 @@
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
+import type { PersistedConnectorRecord } from "./connector-record.js";
 import { ChatgptAppsMcpBridge } from "./mcp-bridge.js";
 import type { PersistedConnectorSnapshot } from "./snapshot-cache.js";
 import { resolveChatgptAppsStatePaths } from "./state-paths.js";
@@ -25,55 +25,33 @@ function createConfig(
   } as OpenClawConfig;
 }
 
+function createConnectorRecord(
+  overrides: Partial<PersistedConnectorRecord> = {},
+): PersistedConnectorRecord {
+  return {
+    connectorId: "slack",
+    appId: "asdk_app_slack",
+    appName: "Slack",
+    publishedName: "chatgpt_app_slack",
+    appInvocationToken: "slack",
+    description: "Chat with Slack workspaces.",
+    pluginDisplayNames: ["Slack"],
+    isAccessible: true,
+    isEnabled: true,
+    ...overrides,
+  };
+}
+
 function createPersistedSnapshot(): PersistedConnectorSnapshot {
   return {
-    version: 1,
+    version: 2,
     fetchedAt: "2026-03-29T18:00:00.000Z",
     projectedAt: "2026-03-29T18:00:00.000Z",
     accountId: "acct_123",
     authIdentityKey: "user@example.com",
     configHash: "config-hash",
     baseUrlHash: "base-hash",
-    inventory: [
-      {
-        id: "asdk_app_slack",
-        name: "Slack",
-        description: "Chat with Slack workspaces.",
-        logoUrl: null,
-        logoUrlDark: null,
-        distributionChannel: null,
-        branding: null,
-        appMetadata: null,
-        labels: null,
-        installUrl: null,
-        isAccessible: true,
-        isEnabled: true,
-        pluginDisplayNames: ["Slack"],
-      },
-    ],
-    statuses: [
-      {
-        name: "slack",
-        tools: {
-          slack_send: {
-            name: "slack_send",
-            description: "Send to Slack",
-            inputSchema: {
-              type: "object",
-              properties: {
-                text: {
-                  type: "string",
-                },
-              },
-              required: ["text"],
-            },
-          },
-        },
-        resources: [],
-        resourceTemplates: [],
-        authStatus: "oAuth",
-      },
-    ],
+    connectors: [createConnectorRecord()],
   };
 }
 
@@ -91,7 +69,7 @@ async function createStateDir(): Promise<string> {
 }
 
 describe("ChatgptAppsMcpBridge", () => {
-  it("publishes one connector-level tool per enabled app", async () => {
+  it("publishes one connector-level tool per enabled connector record", async () => {
     const stateDir = await createStateDir();
     await writeSnapshot(stateDir);
     const bridge = new ChatgptAppsMcpBridge({
@@ -134,7 +112,7 @@ describe("ChatgptAppsMcpBridge", () => {
       await expect(bridge.listTools()).resolves.toEqual([
         expect.objectContaining({
           name: "chatgpt_app_slack",
-          description: expect.stringContaining("request field"),
+          description: expect.not.stringContaining("server-side capability"),
           inputSchema: expect.objectContaining({
             required: ["request"],
           }),
@@ -148,34 +126,17 @@ describe("ChatgptAppsMcpBridge", () => {
   it("does not publish internal collab apps under wildcard enablement", async () => {
     const stateDir = await createStateDir();
     const snapshot = createPersistedSnapshot();
-    snapshot.inventory.push({
-      id: "collab",
-      name: "Collab",
-      description: null,
-      logoUrl: null,
-      logoUrlDark: null,
-      distributionChannel: null,
-      branding: null,
-      appMetadata: null,
-      labels: null,
-      installUrl: null,
-      isAccessible: true,
-      isEnabled: true,
-      pluginDisplayNames: ["Collab"],
-    });
-    snapshot.statuses.push({
-      name: "collab",
-      tools: {
-        collab_send_message: {
-          name: "collab_send_message",
-          description: "Internal collab dispatch",
-          inputSchema: { type: "object" },
-        },
-      },
-      resources: [],
-      resourceTemplates: [],
-      authStatus: "oAuth",
-    });
+    snapshot.connectors.push(
+      createConnectorRecord({
+        connectorId: "collab",
+        appId: "collab",
+        appName: "Collab",
+        publishedName: "chatgpt_app_collab",
+        appInvocationToken: "collab",
+        description: "Internal collab dispatch.",
+        pluginDisplayNames: ["Collab"],
+      }),
+    );
     await writeSnapshot(stateDir, snapshot);
 
     const bridge = new ChatgptAppsMcpBridge({
@@ -222,10 +183,14 @@ describe("ChatgptAppsMcpBridge", () => {
     }
   });
 
-  it("fails publication when mcpServerStatus/list data is missing", async () => {
+  it("fails publication when a connector snapshot record is malformed", async () => {
     const stateDir = await createStateDir();
     const snapshot = createPersistedSnapshot();
-    snapshot.statuses = [];
+    snapshot.connectors = [
+      createConnectorRecord({
+        publishedName: "not-the-published-name",
+      }),
+    ];
     await writeSnapshot(stateDir, snapshot);
 
     const bridge = new ChatgptAppsMcpBridge({
@@ -265,32 +230,20 @@ describe("ChatgptAppsMcpBridge", () => {
     });
 
     try {
-      await expect(bridge.listTools()).rejects.toThrow(
-        "Missing mcpServerStatus/list results for ChatGPT app publication",
-      );
+      await expect(bridge.listTools()).rejects.toThrow("mismatched publishedName");
     } finally {
       await bridge.close();
     }
   });
 
-  it("fails publication when a configured connector is missing status metadata", async () => {
+  it("fails publication when the snapshot contains duplicate connector ids", async () => {
     const stateDir = await createStateDir();
     const snapshot = createPersistedSnapshot();
-    snapshot.inventory.push({
-      id: "gmail",
-      name: "Gmail",
-      description: "Read mail.",
-      logoUrl: null,
-      logoUrlDark: null,
-      distributionChannel: null,
-      branding: null,
-      appMetadata: null,
-      labels: null,
-      installUrl: null,
-      isAccessible: true,
-      isEnabled: true,
-      pluginDisplayNames: ["Gmail"],
-    });
+    snapshot.connectors.push(
+      createConnectorRecord({
+        appId: "asdk_app_slack_2",
+      }),
+    );
     await writeSnapshot(stateDir, snapshot);
 
     const bridge = new ChatgptAppsMcpBridge({
@@ -331,7 +284,7 @@ describe("ChatgptAppsMcpBridge", () => {
 
     try {
       await expect(bridge.listTools()).rejects.toThrow(
-        "Incomplete mcpServerStatus/list results for ChatGPT app publication: gmail",
+        "Duplicate connector snapshot record for connector: slack",
       );
     } finally {
       await bridge.close();
@@ -398,7 +351,6 @@ describe("ChatgptAppsMcpBridge", () => {
             publishedName: "chatgpt_app_slack",
             appName: "Slack",
             appInvocationToken: "slack",
-            availableToolNames: ["slack_send"],
           },
           args: {
             request: "Send a launch update to #team",
@@ -410,126 +362,20 @@ describe("ChatgptAppsMcpBridge", () => {
     }
   });
 
-  it("derives connector publication from multiplexed codex_apps status metadata", async () => {
-    const stateDir = await createStateDir();
-    const snapshot = createPersistedSnapshot();
-    snapshot.statuses = [
-      {
-        name: "codex_apps",
-        tools: {
-          gmail_search_emails: {
-            name: "gmail_search_emails",
-            description: "Search email",
-            inputSchema: { type: "object" },
-            _meta: {
-              connector_name: "Gmail",
-            },
-          } as unknown as NonNullable<
-            PersistedConnectorSnapshot["statuses"][number]["tools"]
-          >[string],
-        },
-        resources: [],
-        resourceTemplates: [],
-        authStatus: "oAuth",
-      },
-    ];
-    snapshot.inventory = [
-      {
-        id: "gmail",
-        name: "Gmail",
-        description: "Read mail.",
-        logoUrl: null,
-        logoUrlDark: null,
-        distributionChannel: null,
-        branding: null,
-        appMetadata: null,
-        labels: null,
-        installUrl: null,
-        isAccessible: true,
-        isEnabled: true,
-        pluginDisplayNames: ["Gmail"],
-      },
-    ];
-    await writeSnapshot(stateDir, snapshot);
-
-    const bridge = new ChatgptAppsMcpBridge({
-      loadOpenClawConfig: () => createConfig({ gmail: { enabled: true } }),
-      env: {
-        ...process.env,
-        OPENCLAW_STATE_DIR: stateDir,
-      },
-      ensureFreshSnapshot: async () => ({
-        status: "ok",
-        source: "cache",
-        snapshot,
-        config: {
-          enabled: true,
-          appServer: { command: "codex", args: [] },
-          linking: {
-            enabled: false,
-            waitTimeoutMs: 60_000,
-            pollIntervalMs: 3_000,
-          },
-          connectors: { gmail: { enabled: true } },
-        },
-        openclawConfig: createConfig({ gmail: { enabled: true } }),
-        statePaths: resolveChatgptAppsStatePaths({
-          OPENCLAW_STATE_DIR: stateDir,
-          HOME: os.tmpdir(),
-        }),
-      }),
-      resolveProjectedAuth: async () => ({
-        status: "ok",
-        accessToken: "access-token",
-        accountId: "acct_123",
-        planType: null,
-        profileId: "openai-codex:default",
-        identity: { email: "user@example.com", profileName: "user@example.com" },
-      }),
-    });
-
-    try {
-      await expect(bridge.listTools()).resolves.toEqual([
-        expect.objectContaining({
-          name: "chatgpt_app_gmail",
-        }),
-      ]);
-    } finally {
-      await bridge.close();
-    }
-  });
-
   it("honors wildcard enablement with explicit disables", async () => {
     const stateDir = await createStateDir();
     const snapshot = createPersistedSnapshot();
-    snapshot.inventory.push({
-      id: "gmail",
-      name: "Gmail",
-      description: "Read mail.",
-      logoUrl: null,
-      logoUrlDark: null,
-      distributionChannel: null,
-      branding: null,
-      appMetadata: null,
-      labels: null,
-      installUrl: null,
-      isAccessible: true,
-      isEnabled: true,
-      pluginDisplayNames: ["Gmail"],
-    });
-    snapshot.statuses.push({
-      name: "gmail",
-      tools: {
-        gmail_search_emails: {
-          name: "gmail_search_emails",
-          description: "Search email",
-          inputSchema: { type: "object" },
-        },
-      },
-      resources: [],
-      resourceTemplates: [],
-      authStatus: "oAuth",
-    });
+    snapshot.connectors.push(
+      createConnectorRecord({
+        connectorId: "gmail",
+        appId: "asdk_app_gmail",
+        appName: "Gmail",
+        publishedName: "chatgpt_app_gmail",
+        appInvocationToken: "gmail",
+        description: "Read mail.",
+        pluginDisplayNames: ["Gmail"],
+      }),
+    );
     await writeSnapshot(stateDir, snapshot);
 
     const bridge = new ChatgptAppsMcpBridge({

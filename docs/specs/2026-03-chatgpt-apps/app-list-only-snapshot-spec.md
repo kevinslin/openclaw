@@ -9,14 +9,14 @@
 
 ### Goal
 
-Remove `mcpServerStatus/list` from the `openai-apps` bundle and make `app/list`
+Remove `legacy app-status RPC` from the `openai-apps` bundle and make `app/list`
 the only external source of truth, with the persisted snapshot storing one
 canonical connector-level record per published app for publication and runtime
 route reconstruction.
 
 ### In Scope
 
-- Stop calling `mcpServerStatus/list` during snapshot refresh.
+- Stop calling `legacy app-status RPC` during snapshot refresh.
 - Replace the persisted `statuses` snapshot field with a single connector-level
   snapshot structure derived from `app/list`.
 - Make `tools/list` publish solely from connector records derived from
@@ -41,7 +41,7 @@ route reconstruction.
 The bundle has already moved to a connector-level tool namespace,
 `chatgpt_app_<connectorId>`, and app invocation now uses app-server threads plus
 `$<app-slug>` mention input. That means the old reason for reading
-`mcpServerStatus/list` has mostly disappeared: we no longer publish one tool per
+`legacy app-status RPC` has mostly disappeared: we no longer publish one tool per
 remote MCP tool, and we no longer need remote-tool-name routing for top-level
 execution.
 
@@ -53,7 +53,7 @@ connector-level design.
 ### Current State
 
 - `captureAppServerSnapshot()` reads both paginated `app/list` and paginated
-  `mcpServerStatus/list` before writing the persisted snapshot in
+  `legacy app-status RPC` before writing the persisted snapshot in
   `extensions/openai-apps/src/app-server-session.ts`.
 - The persisted snapshot still stores `inventory: AppInfo[]` plus
   `statuses: McpServerStatus[]` in `extensions/openai-apps/src/snapshot-cache.ts`,
@@ -108,7 +108,7 @@ connector-level design.
 | App invocation token             | bundle-derived from `AppInfo`                | normalized slug string             | during snapshot derivation                 | embedded in connector snapshot | `buildInvocationInput()`                  | Yes                         |
 | Published tool name              | bundle-derived from connector id             | `chatgpt_app_<connectorId>`        | during snapshot derivation                 | embedded in connector snapshot | `listTools()` / `callTool()` route lookup | Yes                         |
 | App accessibility and enablement | `AppInfo.isAccessible` / `AppInfo.isEnabled` | booleans                           | returned by `app/list`                     | embedded in connector snapshot | publication gating                        | Yes                         |
-| Tool capability count            | currently `mcpServerStatus/list`             | number derived from `status.tools` | refresh session                            | snapshot write                 | tool description text only                | Yes, but should be removed  |
+| Tool capability count            | currently `legacy app-status RPC`            | number derived from `status.tools` | refresh session                            | snapshot write                 | tool description text only                | Yes, but should be removed  |
 
 The ordering problem is favorable here: every persisted value needed for
 connector-level publication can be derived before the snapshot is written, using
@@ -144,7 +144,7 @@ keeping one canonical structure.
 ### Integration Points / Touchpoints
 
 - `extensions/openai-apps/src/app-server-session.ts`
-  Why: stop calling `listMcpServerStatus()` and return app-list-only capture
+  Why: stop calling `legacy status listing helper()` and return app-list-only capture
   data.
 - `extensions/openai-apps/src/snapshot-cache.ts`
   Why: redefine the persisted snapshot type and cache-key inputs around one
@@ -163,7 +163,7 @@ keeping one canonical structure.
   Why: update the documented cache snapshot example and remove status-based
   language.
 - `docs/flows/topic.openai-apps-initialization-cache.md`
-  Why: refresh no longer reads `mcpServerStatus/list`.
+  Why: refresh no longer reads `legacy app-status RPC`.
 - `docs/flows/topic.openai-apps-runtime-call.md`
   Why: runtime route reconstruction should point at snapshot connector metadata,
   not status-derived route state.
@@ -181,7 +181,8 @@ keeping one canonical structure.
   - prefer normalized non-opaque `app.id`
   - otherwise use normalized `app.name`
   - otherwise use the first normalized `pluginDisplayNames` entry
-  - duplicate canonical connector ids are a hard refresh failure
+  - if two apps still collapse to the same connector id, keep the first base id
+    and suffix later collisions with a stable fragment derived from `app.id`
 - Alias handling: `pluginDisplayNames` may be persisted for debugging and future
   explainability, but they do not create alternate published routes. Each app
   yields exactly one canonical connector record.
@@ -279,7 +280,7 @@ to preserve runtime behavior.
 
 ## Acceptance Criteria
 
-- [ ] `openai-apps` no longer calls app-server `mcpServerStatus/list` during
+- [ ] `openai-apps` no longer calls app-server `legacy app-status RPC` during
       refresh.
 - [ ] The persisted snapshot no longer stores `statuses` and instead stores
       one canonical connector-level record set derived from `app/list` to
@@ -296,7 +297,7 @@ to preserve runtime behavior.
 - [ ] Malformed or incomplete connector records fail publication instead of
       degrading or being skipped silently.
 - [ ] Snapshot freshness and cache-key logic no longer depend on
-      `mcpServerStatus/list` output.
+      `legacy app-status RPC` output.
 - [ ] The initialization/cache flow and README snapshot example both describe an
       app-list-only snapshot model.
 
@@ -314,7 +315,7 @@ to preserve runtime behavior.
 
 ### Phase 2: Remove status collection from refresh
 
-- [ ] Delete `listMcpServerStatuses()` from the refresh path.
+- [ ] Delete `legacy status refresh helper()` from the refresh path.
 - [ ] Make `captureAppServerSnapshot()` read only paginated `app/list`.
 - [ ] Update refresh tests to assert app-list-only capture behavior.
 
@@ -424,4 +425,4 @@ Manual validation:
 
 - 2026-03-29: Incorporated review feedback by defining `connectors[]` membership, canonical connector-id derivation, the connector record contract, hard-failure behavior for malformed records, and expanded validation coverage. (019d3cd6-184f-7e53-b6ff-189c1cff7a9a - (49b9a10a20))
 - 2026-03-29: Revised the spec to use one canonical persisted `connectors[]` snapshot structure instead of persisting both raw `inventory` and derived connector metadata. (019d3cd6-184f-7e53-b6ff-189c1cff7a9a - (49b9a10a20))
-- 2026-03-29: Created the feature spec for removing `mcpServerStatus/list` and moving `openai-apps` to an app-list-only snapshot contract. (019d3cd6-184f-7e53-b6ff-189c1cff7a9a - (49b9a10a20))
+- 2026-03-29: Created the feature spec for removing `legacy app-status RPC` and moving `openai-apps` to an app-list-only snapshot contract. (019d3cd6-184f-7e53-b6ff-189c1cff7a9a - (49b9a10a20))

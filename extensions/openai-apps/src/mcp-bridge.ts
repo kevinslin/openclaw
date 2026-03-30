@@ -7,7 +7,6 @@ import {
   type CallToolResult,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
-import type { protocol } from "codex-app-server-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   invokeViaAppServer,
@@ -16,12 +15,15 @@ import {
 } from "./app-server-invoker.js";
 import { resolveChatgptAppsProjectedAuth } from "./auth-projector.js";
 import { hashChatgptAppsConfig, resolveChatgptAppsConfig } from "./config.js";
+import {
+  assertValidPersistedConnectorRecord,
+  normalizeConnectorKey,
+  shouldExcludeConnectorId,
+  type PersistedConnectorRecord,
+} from "./connector-record.js";
 import { ensureFreshSnapshot } from "./refresh-snapshot.js";
 import { computeSnapshotKey, type PersistedConnectorSnapshot } from "./snapshot-cache.js";
 import { resolveChatgptAppsStatePaths } from "./state-paths.js";
-
-type AppInfo = protocol.v2.AppInfo;
-type McpServerStatus = protocol.v2.McpServerStatus;
 
 export const MCP_SERVER_NAME = "openai-apps";
 const ROUTING_META_KEY = "openclaw/chatgpt-apps";
@@ -44,76 +46,6 @@ type BridgeToolCache = {
   tools: Tool[];
   routes: Map<string, BridgeRoute>;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-const EXCLUDED_CONNECTOR_IDS = new Set([
-  "collab",
-  "connector_openai_general_agent",
-  "general_agent",
-]);
-
-function normalizeConnectorKey(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .replace(/_+/g, "_");
-}
-
-function looksLikeOpaqueAppId(value: string): boolean {
-  return value.startsWith("connector_") || value.startsWith("asdk_app_");
-}
-
-function deriveConnectorKeysFromApp(app: AppInfo): string[] {
-  const candidates = new Set<string>();
-
-  if (!looksLikeOpaqueAppId(app.id)) {
-    const normalizedId = normalizeConnectorKey(app.id);
-    if (normalizedId) {
-      candidates.add(normalizedId);
-    }
-  }
-
-  for (const value of [app.name, ...app.pluginDisplayNames]) {
-    const normalized = normalizeConnectorKey(value);
-    if (normalized) {
-      candidates.add(normalized);
-    }
-  }
-
-  return [...candidates];
-}
-
-function shouldExcludeConnectorId(connectorId: string | null | undefined): boolean {
-  if (!connectorId) {
-    return false;
-  }
-  return EXCLUDED_CONNECTOR_IDS.has(normalizeConnectorKey(connectorId));
-}
-
-function normalizeAppInvocationToken(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .replace(/-+/g, "-");
-}
-
-function deriveAppInvocationToken(app: AppInfo, connectorId: string): string {
-  for (const candidate of [app.name, ...app.pluginDisplayNames, connectorId]) {
-    const normalized = normalizeAppInvocationToken(candidate);
-    if (normalized) {
-      return normalized;
-    }
-  }
-
-  return "app";
-}
 
 function buildConnectorConfigState(configuredConnectors: Record<string, { enabled: boolean }>): {
   wildcardEnabled: boolean;
@@ -152,7 +84,7 @@ function buildConnectorConfigState(configuredConnectors: Record<string, { enable
 }
 
 function buildAllowedConnectorIds(params: {
-  inventory: AppInfo[];
+  connectors: PersistedConnectorRecord[];
   configuredConnectors: Record<string, { enabled: boolean }>;
 }): Set<string> {
   const { wildcardEnabled, enabledConnectorIds, disabledConnectorIds } = buildConnectorConfigState(
@@ -160,113 +92,61 @@ function buildAllowedConnectorIds(params: {
   );
 
   const allowed = new Set<string>();
-  for (const app of params.inventory) {
-    if (!app.isAccessible || !app.isEnabled) {
+  for (const connector of params.connectors) {
+    assertValidPersistedConnectorRecord(connector);
+    if (!connector.isAccessible || !connector.isEnabled) {
       continue;
     }
-    for (const connectorId of deriveConnectorKeysFromApp(app)) {
-      if (shouldExcludeConnectorId(connectorId) || disabledConnectorIds.has(connectorId)) {
-        continue;
-      }
-      if (
-        Object.keys(params.configuredConnectors).length === 0 ||
-        wildcardEnabled ||
-        enabledConnectorIds.has(connectorId)
-      ) {
-        allowed.add(connectorId);
-      }
+    if (
+      shouldExcludeConnectorId(connector.connectorId) ||
+      disabledConnectorIds.has(connector.connectorId)
+    ) {
+      continue;
+    }
+    if (
+      Object.keys(params.configuredConnectors).length === 0 ||
+      wildcardEnabled ||
+      enabledConnectorIds.has(connector.connectorId)
+    ) {
+      allowed.add(connector.connectorId);
     }
   }
 
   return allowed;
 }
 
-function buildAppRouteByConnectorId(inventory: AppInfo[]): Map<string, BridgeRoute> {
+function buildAppRouteByConnectorId(
+  connectors: PersistedConnectorRecord[],
+): Map<string, BridgeRoute> {
   const routes = new Map<string, BridgeRoute>();
 
-  for (const app of inventory) {
-    if (!app.isAccessible || !app.isEnabled) {
-      continue;
+  for (const connector of connectors) {
+    assertValidPersistedConnectorRecord(connector);
+    if (routes.has(connector.connectorId)) {
+      throw new Error(
+        `Duplicate connector snapshot record for connector: ${connector.connectorId}`,
+      );
     }
-    for (const connectorId of deriveConnectorKeysFromApp(app)) {
-      if (shouldExcludeConnectorId(connectorId) || routes.has(connectorId)) {
-        continue;
-      }
-      routes.set(connectorId, {
-        connectorId,
-        appId: app.id,
-        publishedName: `chatgpt_app_${connectorId}`,
-        appName: app.name || app.pluginDisplayNames[0] || connectorId,
-        appInvocationToken: deriveAppInvocationToken(app, connectorId),
-        availableToolNames: [],
-      });
-    }
+    routes.set(connector.connectorId, {
+      connectorId: connector.connectorId,
+      appId: connector.appId,
+      publishedName: connector.publishedName,
+      appName: connector.appName,
+      appInvocationToken: connector.appInvocationToken,
+    });
   }
 
   return routes;
 }
 
-function buildStatusByConnectorId(statuses: McpServerStatus[]): Map<string, McpServerStatus> {
-  const map = new Map<string, McpServerStatus>();
-  for (const status of statuses) {
-    const statusTools = isRecord(status.tools)
-      ? (status.tools as Record<string, McpServerStatus["tools"][string]>)
-      : {};
-
-    let mappedTool = false;
-    for (const [toolName, tool] of Object.entries(statusTools)) {
-      const meta = isRecord(tool) && isRecord(tool._meta) ? tool._meta : null;
-      const connectorName = typeof meta?.connector_name === "string" ? meta.connector_name : null;
-      const connectorId = connectorName ? normalizeConnectorKey(connectorName) : "";
-      if (!connectorId || shouldExcludeConnectorId(connectorId)) {
-        continue;
-      }
-
-      mappedTool = true;
-      const existing = map.get(connectorId);
-      if (existing) {
-        existing.tools ??= {};
-        existing.tools[toolName] = tool;
-        continue;
-      }
-
-      map.set(connectorId, {
-        ...status,
-        name: connectorId,
-        tools: {
-          [toolName]: tool,
-        },
-      });
-    }
-
-    if (mappedTool) {
-      continue;
-    }
-
-    const connectorId = normalizeConnectorKey(status.name);
-    if (!connectorId || shouldExcludeConnectorId(connectorId) || map.has(connectorId)) {
-      continue;
-    }
-    map.set(connectorId, status);
-  }
-  return map;
+function buildToolDescription(connector: PersistedConnectorRecord): string {
+  return `${connector.description} Send a natural-language instruction in the request field.`;
 }
 
-function buildToolDescription(app: AppInfo, status: McpServerStatus): string {
-  const toolCount = Object.keys(status.tools ?? {}).length;
-  const lead =
-    app.description?.trim() || `Use ${app.name || status.name || app.id} through ChatGPT apps.`;
-  const capabilitySuffix =
-    toolCount > 0
-      ? ` The app exposes ${toolCount} server-side capability${toolCount === 1 ? "" : "ies"}.`
-      : "";
-  return `${lead}${capabilitySuffix} Send a natural-language instruction in the request field.`;
-}
-
-function buildPublishedTool(route: BridgeRoute, app: AppInfo, status: McpServerStatus): Tool {
+function buildPublishedTool(route: BridgeRoute, connector: PersistedConnectorRecord): Tool {
   return {
     name: route.publishedName,
-    description: buildToolDescription(app, status),
+    description: buildToolDescription(connector),
     inputSchema: CONNECTOR_TOOL_INPUT_SCHEMA,
     _meta: {
       [ROUTING_META_KEY]: {
@@ -428,7 +308,7 @@ export class ChatgptAppsMcpBridge {
     config: ReturnType<typeof resolveChatgptAppsConfig>,
   ): Promise<BridgeToolCache> {
     const allowedConnectorIds = buildAllowedConnectorIds({
-      inventory: snapshot.inventory,
+      connectors: snapshot.connectors,
       configuredConnectors: config.connectors,
     });
     const routes = new Map<string, BridgeRoute>();
@@ -442,38 +322,30 @@ export class ChatgptAppsMcpBridge {
       };
     }
 
-    const appRoutes = buildAppRouteByConnectorId(snapshot.inventory);
-    const statusByConnectorId = buildStatusByConnectorId(snapshot.statuses);
-    if (statusByConnectorId.size === 0) {
-      throw new Error("Missing mcpServerStatus/list results for ChatGPT app publication");
+    const appRoutes = buildAppRouteByConnectorId(snapshot.connectors);
+    const connectorById = new Map<string, PersistedConnectorRecord>();
+    for (const connector of snapshot.connectors) {
+      const validatedConnector = assertValidPersistedConnectorRecord(connector);
+      if (connectorById.has(validatedConnector.connectorId)) {
+        throw new Error(
+          `Duplicate connector snapshot record for connector: ${validatedConnector.connectorId}`,
+        );
+      }
+      connectorById.set(validatedConnector.connectorId, validatedConnector);
     }
 
     for (const connectorId of [...allowedConnectorIds].sort()) {
       const route = appRoutes.get(connectorId);
       if (!route) {
-        throw new Error(`Missing app inventory entry for connector: ${connectorId}`);
+        throw new Error(`Missing connector snapshot record for connector: ${connectorId}`);
       }
-      const app = snapshot.inventory.find((entry) =>
-        deriveConnectorKeysFromApp(entry).includes(connectorId),
-      );
-      if (!app) {
-        throw new Error(`Missing app inventory metadata for connector: ${connectorId}`);
+      const connector = connectorById.get(connectorId);
+      if (!connector) {
+        throw new Error(`Missing connector snapshot metadata for connector: ${connectorId}`);
       }
-
-      const status = statusByConnectorId.get(connectorId);
-      if (!status) {
-        throw new Error(
-          `Incomplete mcpServerStatus/list results for ChatGPT app publication: ${connectorId}`,
-        );
-      }
-      const routedToolNames = Object.keys(status.tools ?? {}).sort();
-      const routedRoute: BridgeRoute = {
-        ...route,
-        availableToolNames: routedToolNames,
-      };
-      const tool = buildPublishedTool(routedRoute, app, status);
+      const tool = buildPublishedTool(route, connector);
       tools.push(tool);
-      routes.set(tool.name, routedRoute);
+      routes.set(tool.name, route);
     }
 
     return {

@@ -65,7 +65,7 @@ behind a bundle config mode, and to make it the default.
   `tools/call` through `remote-codex-apps-client.ts`.
 - `extensions/openai-apps/src/app-server-session.ts` already spawns
   `codex app-server`, projects auth, writes derived app config, and captures
-  `app/list` plus `mcpServerStatus/list` for snapshot refresh.
+  `app/list` plus `legacy app-status RPC` for snapshot refresh.
 - The research doc recommends an app-server-only prototype that resolves exact
   app ids from `app/list`, starts a fresh thread, invokes the app via
   `$<app-slug>` plus `mention { path: "app://<id>" }`, and converts the turn
