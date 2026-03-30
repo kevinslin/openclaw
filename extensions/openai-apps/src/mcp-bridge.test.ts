@@ -398,6 +398,7 @@ describe("ChatgptAppsMcpBridge", () => {
             publishedName: "chatgpt_app_slack",
             appName: "Slack",
             appInvocationToken: "slack",
+            availableToolNames: ["slack_send"],
           },
           args: {
             request: "Send a launch update to #team",

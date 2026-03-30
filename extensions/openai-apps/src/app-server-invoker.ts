@@ -1,5 +1,6 @@
 import { appendFileSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
@@ -9,7 +10,7 @@ import {
 } from "codex-app-server-sdk";
 import { resolveAppServerCommand } from "./app-server-command.js";
 import type { ChatgptAppsResolvedAuth } from "./auth-projector.js";
-import { buildDerivedAppsConfig, type ChatgptAppsConfig } from "./config.js";
+import type { ChatgptAppsConfig } from "./config.js";
 import type { ChatgptAppsStatePaths } from "./state-paths.js";
 
 type ConfigValueWriteParams = protocol.v2.ConfigValueWriteParams;
@@ -18,13 +19,34 @@ type GetAuthStatusResponse = protocol.GetAuthStatusResponse;
 type GetAccountResponse = protocol.v2.GetAccountResponse;
 type LoginAccountParams = protocol.v2.LoginAccountParams;
 type LoginAccountResponse = protocol.v2.LoginAccountResponse;
+type ListMcpServerStatusParams = protocol.v2.ListMcpServerStatusParams;
+type ListMcpServerStatusResponse = protocol.v2.ListMcpServerStatusResponse;
 type ThreadReadResponse = protocol.v2.ThreadReadResponse;
 type ThreadStartResponse = protocol.v2.ThreadStartResponse;
 type TurnCompletedNotification = protocol.v2.TurnCompletedNotification;
 type TurnStartResponse = protocol.v2.TurnStartResponse;
+type ThreadStartParams = protocol.v2.ThreadStartParams;
+type TurnStartParams = protocol.v2.TurnStartParams;
 type UserInput = protocol.v2.UserInput;
 
 const TURN_TIMEOUT_MS = 180_000;
+const CONNECTOR_OUTPUT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["status", "result", "error"],
+  properties: {
+    status: {
+      type: "string",
+      enum: ["success", "failure"],
+    },
+    result: {
+      type: "string",
+    },
+    error: {
+      type: "string",
+    },
+  },
+} as const;
 
 function resolveConversationSessionId(env: NodeJS.ProcessEnv | undefined): string | null {
   for (const candidate of [
@@ -100,18 +122,11 @@ export type AppServerInvocationClient = {
     includeToken: boolean | null;
     refreshToken: boolean | null;
   }): Promise<GetAuthStatusResponse>;
+  listMcpServerStatus(params: ListMcpServerStatusParams): Promise<ListMcpServerStatusResponse>;
   writeConfigValue(params: ConfigValueWriteParams): Promise<ConfigWriteResponse>;
-  startThread(params: {
-    cwd?: string | null;
-    ephemeral?: boolean | null;
-    experimentalRawEvents: boolean;
-    persistExtendedHistory: boolean;
-  }): Promise<ThreadStartResponse>;
+  startThread(params: ThreadStartParams): Promise<ThreadStartResponse>;
   runTurn(
-    params: {
-      threadId: string;
-      input: UserInput[];
-    },
+    params: TurnStartParams,
     options?: {
       timeoutMs?: number;
       signal?: AbortSignal;
@@ -125,6 +140,7 @@ export type AppServerInvocationClient = {
     method: M,
     handler: (context: ServerRequestContext<M>) => Promise<unknown> | unknown,
   ): () => void;
+  onServerRequest?(listener: (context: ServerRequestContext) => Promise<void> | void): () => void;
   onStderr?(listener: (chunk: string) => void): () => void;
   onClose?(
     listener: (event: {
@@ -176,26 +192,31 @@ function buildInvocationInput(
   args: Record<string, unknown> | undefined,
 ): UserInput[] {
   const request = readInvocationRequest(args);
-  const capabilityGuidance =
-    route.availableToolNames.length > 0
-      ? `\n\nAvailable ${route.appName} connector tools in this session include: ${route.availableToolNames
-          .slice(0, 12)
-          .join(
-            ", ",
-          )}. Use the available tools when relevant, and only say a capability is unavailable if a tool call or permission check actually fails.`
-      : "";
   return [
     {
       type: "text",
-      text: `$${route.appInvocationToken} ${request}${capabilityGuidance}`,
+      text: `$${route.appInvocationToken} ${request}`,
       text_elements: [],
     },
     {
       type: "mention",
       name: route.appName,
       path: `app://${route.appId}`,
-    },
+    } as UserInput,
   ];
+}
+
+function buildDeveloperInstructions(route: AppServerInvocationRoute): string {
+  return [
+    `You are servicing one OpenClaw connector tool call for ${route.appName}.`,
+    "Use the app mentioned in the user input instead of browsing or relying on unrelated tools.",
+    "Do not use browser, shell, file, web, image, memory, or unrelated tools.",
+    "Do not ask follow-up questions.",
+    "Do not fabricate success.",
+    'Return only JSON matching the schema {"status":"success|failure","result":"string","error":"string"}.',
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function formatQuestionPrompts(
@@ -205,6 +226,64 @@ function formatQuestionPrompts(
     .map((question) => question.question)
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     .join(" ");
+}
+
+function pickAnswerFromQuestion(question: unknown): string {
+  if (typeof question !== "object" || question === null) {
+    return "yes";
+  }
+
+  const options = Array.isArray((question as { options?: unknown[] }).options)
+    ? (question as { options: unknown[] }).options
+    : [];
+  const labels = options
+    .map((option) =>
+      typeof option === "object" &&
+      option !== null &&
+      typeof (option as { label?: unknown }).label === "string"
+        ? (option as { label: string }).label
+        : null,
+    )
+    .filter((label): label is string => label !== null);
+
+  const preferred = labels.find((label) =>
+    /\b(approve|allow|continue|send|yes|confirm)\b/i.test(label),
+  );
+  if (preferred) {
+    return preferred.replace(" (Recommended)", "");
+  }
+
+  const recommended = labels.find((label) => label.includes("(Recommended)"));
+  if (recommended) {
+    return recommended.replace(" (Recommended)", "");
+  }
+
+  return labels[0]?.replace(" (Recommended)", "") ?? "yes";
+}
+
+function buildUserInputResponse(params: unknown): protocol.v2.ToolRequestUserInputResponse {
+  const answers: protocol.v2.ToolRequestUserInputResponse["answers"] = {};
+  if (
+    typeof params !== "object" ||
+    params === null ||
+    !Array.isArray((params as { questions?: unknown[] }).questions)
+  ) {
+    return { answers };
+  }
+
+  for (const question of (params as { questions: unknown[] }).questions) {
+    if (
+      typeof question !== "object" ||
+      question === null ||
+      typeof (question as { id?: unknown }).id !== "string"
+    ) {
+      continue;
+    }
+    answers[(question as { id: string }).id] = {
+      answers: [pickAnswerFromQuestion(question)],
+    };
+  }
+  return { answers };
 }
 
 function extractTurnText(response: ThreadReadResponse, turnId: string): string | null {
@@ -217,6 +296,27 @@ function extractTurnText(response: ThreadReadResponse, turnId: string): string |
     .reverse()
     .find((item) => item.type === "agentMessage" && item.text.trim().length > 0);
   if (lastAgentMessage?.type === "agentMessage") {
+    const trimmed = lastAgentMessage.text.trim();
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        typeof (parsed as { status?: unknown }).status === "string"
+      ) {
+        const status = (parsed as { status: string }).status;
+        const result = (parsed as { result?: unknown }).result;
+        const error = (parsed as { error?: unknown }).error;
+        if (status === "success" && typeof result === "string" && result.trim().length > 0) {
+          return result;
+        }
+        if (typeof error === "string" && error.trim().length > 0) {
+          return error;
+        }
+      }
+    } catch {
+      // Plain-text output is still acceptable.
+    }
     return lastAgentMessage.text;
   }
 
@@ -284,7 +384,10 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
     params.statePaths.rootDir,
   );
 
-  await mkdir(params.statePaths.codexHomeDir, { recursive: true });
+  await mkdir(params.statePaths.rootDir, { recursive: true });
+  const invocationCodexHomeDir = await mkdtemp(
+    path.join(os.tmpdir(), "openclaw-openai-apps-invoke-"),
+  );
   const clientFactory =
     params.clientFactory ??
     (async (factoryParams) => {
@@ -294,6 +397,7 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
         cwd: factoryParams.cwd,
         env: factoryParams.env,
         analyticsDefaultEnabled: true,
+        unhandledServerRequestStrategy: "manual",
       });
       return {
         initializeSession: () => client.initializeSession(),
@@ -308,11 +412,13 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
         loginAccount: (loginParams) => client.loginAccount(loginParams),
         readAccount: (readParams) => client.readAccount(readParams),
         getAuthStatus: (statusParams) => client.getAuthStatus(statusParams),
+        listMcpServerStatus: (listParams) => client.listMcpServerStatus(listParams),
         writeConfigValue: (writeParams) => client.writeConfigValue(writeParams),
         startThread: (startParams) => client.startThread(startParams),
         runTurn: (turnParams, options) => client.runTurn(turnParams, options),
         readThread: (readParams) => client.readThread(readParams),
         handleServerRequest: (method, handler) => client.handleServerRequest(method, handler),
+        onServerRequest: (listener) => client.onServerRequest(listener),
         onStderr: (listener) => client.onStderr(listener),
         onClose: (listener) => client.onClose(listener),
         close: async () => {
@@ -327,7 +433,7 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
     cwd: params.workspaceDir,
     env: {
       ...env,
-      CODEX_HOME: params.statePaths.codexHomeDir,
+      CODEX_HOME: invocationCodexHomeDir,
     },
   });
 
@@ -372,16 +478,21 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
     writeDebugLog(env, "app-server login start", params.statePaths.rootDir);
     await client.loginAccount(toLoginParams(auth));
     writeDebugLog(env, "app-server login done", params.statePaths.rootDir);
-    writeDebugLog(env, "app-server config write start", params.statePaths.rootDir);
-    await client.writeConfigValue({
-      keyPath: "apps",
-      value: buildDerivedAppsConfig(params.config) as protocol.v2.ConfigValueWriteParams["value"],
-      mergeStrategy: "replace",
-      expectedVersion: null,
-    });
-    writeDebugLog(env, "app-server config write done", params.statePaths.rootDir);
+    writeDebugLog(
+      env,
+      "app-server config write skipped for invocation session",
+      params.statePaths.rootDir,
+    );
 
     let serverRequestError: Error | null = null;
+    const handledServerRequests = new Set<string>([
+      "item/tool/requestUserInput",
+      "item/permissions/requestApproval",
+      "mcpServer/elicitation/request",
+      "item/commandExecution/requestApproval",
+      "item/fileChange/requestApproval",
+      "account/chatgptAuthTokens/refresh",
+    ]);
     const registerFailureHandler = <M extends protocol.ServerRequest["method"]>(
       method: M,
       buildError: (context: ServerRequestContext<M>) => Error,
@@ -395,11 +506,34 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
       );
     };
 
-    registerFailureHandler("item/tool/requestUserInput", (context) =>
-      buildApprovalError(
-        "App invocation requires additional user input",
-        formatQuestionPrompts(context.request.params.questions),
-      ),
+    unsubscribeHandlers.push(
+      client.handleServerRequest("item/tool/requestUserInput", async (context) => {
+        return buildUserInputResponse(context.request.params);
+      }),
+    );
+    unsubscribeHandlers.push(
+      client.handleServerRequest("item/permissions/requestApproval", async (context) => {
+        return {
+          permissions: {
+            ...(context.request.params.permissions.network
+              ? { network: context.request.params.permissions.network }
+              : {}),
+            ...(context.request.params.permissions.fileSystem
+              ? { fileSystem: context.request.params.permissions.fileSystem }
+              : {}),
+          },
+          scope: "turn",
+        };
+      }),
+    );
+    unsubscribeHandlers.push(
+      client.handleServerRequest("mcpServer/elicitation/request", async () => {
+        return {
+          action: "decline",
+          content: null,
+          _meta: null,
+        };
+      }),
     );
     registerFailureHandler("item/commandExecution/requestApproval", () =>
       buildApprovalError("App invocation requested command approval"),
@@ -407,12 +541,26 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
     registerFailureHandler("item/fileChange/requestApproval", () =>
       buildApprovalError("App invocation requested file change approval"),
     );
-    registerFailureHandler("item/permissions/requestApproval", () =>
-      buildApprovalError("App invocation requested permissions approval"),
-    );
-    registerFailureHandler("mcpServer/elicitation/request", () =>
-      buildApprovalError("App invocation requested MCP elicitation"),
-    );
+    if (client.onServerRequest) {
+      unsubscribeHandlers.push(
+        client.onServerRequest(async (context) => {
+          writeDebugLog(
+            env,
+            `app-server request method=${context.request.method} params=${serializeDebugValue(context.request.params)}`,
+            params.statePaths.rootDir,
+          );
+          if (handledServerRequests.has(context.request.method)) {
+            return;
+          }
+          const error =
+            buildUnsupportedServerRequestError(
+              `Unhandled server request: ${context.request.method}`,
+            ) ?? new Error(`Unhandled server request: ${context.request.method}`);
+          serverRequestError ??= error;
+          await context.respondError(error.message);
+        }),
+      );
+    }
 
     let invocationInput: UserInput[];
     try {
@@ -434,10 +582,12 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
 
     writeDebugLog(env, "app-server thread start request", params.statePaths.rootDir);
     const threadStart = await client.startThread({
-      cwd: params.workspaceDir ?? null,
+      cwd: params.workspaceDir ?? process.cwd(),
+      approvalPolicy: "never",
+      developerInstructions: buildDeveloperInstructions(params.route),
       ephemeral: false,
       experimentalRawEvents: false,
-      persistExtendedHistory: false,
+      persistExtendedHistory: true,
     });
     const threadId = threadStart.thread.id;
     writeDebugLog(env, `app-server thread started threadId=${threadId}`, params.statePaths.rootDir);
@@ -446,6 +596,9 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
     const run = await client.runTurn(
       {
         threadId,
+        cwd: params.workspaceDir ?? process.cwd(),
+        approvalPolicy: "never",
+        outputSchema: CONNECTOR_OUTPUT_SCHEMA as unknown as TurnStartParams["outputSchema"],
         input: invocationInput,
       },
       { timeoutMs: TURN_TIMEOUT_MS },
@@ -500,5 +653,6 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
     }
     unsubscribeRefresh?.();
     await client.close();
+    await rm(invocationCodexHomeDir, { recursive: true, force: true }).catch(() => {});
   }
 };

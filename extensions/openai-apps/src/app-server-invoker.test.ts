@@ -112,6 +112,11 @@ function createMockClient(
       authToken: null,
       requiresOpenaiAuth: false,
     }),
+    listMcpServerStatus: async () =>
+      ({
+        data: [],
+        nextCursor: null,
+      }) as unknown as protocol.v2.ListMcpServerStatusResponse,
     writeConfigValue: async () => ({
       status: "ok",
       version: "1",
@@ -160,7 +165,7 @@ function createMockClient(
 }
 
 describe("invokeViaAppServer", () => {
-  it("creates a fresh thread and starts a turn with a connector mention", async () => {
+  it("creates a fresh thread and starts a turn without a per-call codex_apps warmup", async () => {
     const startThread = vi.fn<AppServerInvocationClient["startThread"]>(async () =>
       createThreadStartResponse(),
     );
@@ -213,37 +218,45 @@ describe("invokeViaAppServer", () => {
       content: [{ type: "text", text: "ok" }],
     });
     expect(startThread).toHaveBeenCalledWith({
-      cwd: null,
+      cwd: process.cwd(),
+      approvalPolicy: "never",
+      developerInstructions: expect.stringContaining("Use the app mentioned in the user input"),
       ephemeral: false,
       experimentalRawEvents: false,
-      persistExtendedHistory: false,
+      persistExtendedHistory: true,
     });
     expect(runTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         threadId: "thr_123",
+        cwd: process.cwd(),
+        approvalPolicy: "never",
+        outputSchema: expect.objectContaining({
+          type: "object",
+          required: ["status", "result", "error"],
+        }),
         input: [
           expect.objectContaining({
             type: "text",
-            text: expect.stringContaining("$gmail Summarize my recent emails"),
+            text: expect.stringContaining("Summarize my recent emails"),
           }),
-          {
-            type: "mention",
-            name: "Gmail",
-            path: "app://asdk_app_gmail",
-          },
         ],
       }),
       expect.any(Object),
     );
     expect(runTurn.mock.calls[0]?.[0].input[0]).toEqual(
       expect.objectContaining({
-        text: expect.stringContaining("gmail_read_email"),
+        text: "$gmail Summarize my recent emails",
       }),
     );
+    expect(runTurn.mock.calls[0]?.[0].input[1]).toEqual({
+      type: "mention",
+      name: "Gmail",
+      path: "app://asdk_app_gmail",
+    });
     expect(registeredMethods).not.toContain("item/tool/call");
   });
 
-  it("fails clearly when the app requests additional user input", async () => {
+  it("answers app-server user-input prompts instead of failing immediately", async () => {
     let requestUserInputHandler: ((context: unknown) => Promise<unknown> | unknown) | undefined;
     const client = createMockClient({
       handleServerRequest: (method, handler) => {
@@ -253,10 +266,23 @@ describe("invokeViaAppServer", () => {
         return () => {};
       },
       runTurn: async () => {
-        await requestUserInputHandler?.({
+        const response = await requestUserInputHandler?.({
           request: {
             params: {
-              questions: [{ question: "Choose an inbox to search." }],
+              questions: [
+                {
+                  id: "question-1",
+                  question: "Choose an inbox to search.",
+                  options: [{ label: "Continue (Recommended)" }],
+                },
+              ],
+            },
+          },
+        });
+        expect(response).toEqual({
+          answers: {
+            "question-1": {
+              answers: ["Continue"],
             },
           },
         });
@@ -309,7 +335,9 @@ describe("invokeViaAppServer", () => {
         }),
         clientFactory: async () => client,
       }),
-    ).rejects.toThrow("App invocation requires additional user input");
+    ).resolves.toEqual({
+      content: [{ type: "text", text: "ok" }],
+    });
   });
 
   it("fails when the request payload is missing", async () => {
@@ -423,5 +451,44 @@ describe("invokeViaAppServer", () => {
         clientFactory: async () => client,
       }),
     ).rejects.toThrow("App invocation requested unsupported server request: item/tool/call");
+  });
+
+  it("does not spend time listing mcp inventory during a normal tool invocation", async () => {
+    const listMcpServerStatus = vi.fn<AppServerInvocationClient["listMcpServerStatus"]>(
+      async () =>
+        ({
+          data: [],
+          nextCursor: null,
+        }) as unknown as protocol.v2.ListMcpServerStatusResponse,
+    );
+    const client = createMockClient({ listMcpServerStatus });
+
+    await expect(
+      invokeViaAppServer({
+        config,
+        route: {
+          connectorId: "gmail",
+          appId: "asdk_app_gmail",
+          publishedName: "chatgpt_app_gmail",
+          appName: "Gmail",
+          appInvocationToken: "gmail",
+          availableToolNames: ["gmail_search_emails", "gmail_read_email"],
+        },
+        args: { request: "Summarize my recent emails" },
+        statePaths,
+        resolveProjectedAuth: async () => ({
+          status: "ok",
+          accessToken: "access-token",
+          accountId: "acct_123",
+          planType: null,
+          profileId: "openai-codex:default",
+          identity: { email: "user@example.com", profileName: "user@example.com" },
+        }),
+        clientFactory: async () => client,
+      }),
+    ).resolves.toEqual({
+      content: [{ type: "text", text: "ok" }],
+    });
+    expect(listMcpServerStatus).not.toHaveBeenCalled();
   });
 });
