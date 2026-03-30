@@ -424,7 +424,7 @@ Logs:
 
 ## Related docs
 
-- `extensions/openai-apps/docs/flows/topic.openai-apps-list-tools.md`
+- `extensions/openai-apps/docs/flows/ref.openai-apps-list-tools.md`
 
 ## Manual Notes
 
@@ -434,3 +434,4 @@ Logs:
 
 - 2026-03-30: Created the `callTool` flow doc from `extensions/openai-apps` code only (019d3ffc-456e-7500-84dc-309b365ada15 - 966651ecb7)
 - 2026-03-30: Updated the invocation flow for the shared bundle-owned `CODEX_HOME` and pre-turn `apps` config rewrite. (019d4036-0bb6-7a20-9dd6-933a0181e5a5 - afed18cb1c)
+- 2026-03-30: Renamed the flow doc to `ref.openai-apps-call-tool.md` and updated related links. (019d4105-802e-7bd0-be7e-850070d63c37 - d78a1f3059)

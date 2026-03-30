@@ -36,7 +36,6 @@ Ordered call path:
    await runChatgptAppsMcpBridgeStdio({
      loadOpenClawConfig: () => config,
      env: runtimeEnv,
-     hardRefresh: hasHardRefreshFlag(process.argv.slice(2), runtimeEnv),
    })
    ```
 2. Normalize explicit env values and short-circuit when the full tuple is already present.
@@ -285,8 +284,8 @@ Logs:
 
 ## Related docs
 
-- `extensions/openai-apps/docs/flows/topic.openai-apps-list-tools.md`
-- `extensions/openai-apps/docs/flows/topic.openai-apps-projected-auth.md`
+- `extensions/openai-apps/docs/flows/ref.openai-apps-list-tools.md`
+- `extensions/openai-apps/docs/flows/ref.openai-apps-projected-auth.md`
 
 ## Manual Notes
 
@@ -295,3 +294,4 @@ Logs:
 ## Changelog
 
 - 2026-03-30: Created the runtime environment flow doc (019d3ffc-456e-7500-84dc-309b365ada15 - 966651ecb7)
+- 2026-03-30: Renamed the flow doc to `ref.openai-apps-runtime-env.md` and updated startup references. (019d4105-802e-7bd0-be7e-850070d63c37 - d78a1f3059)

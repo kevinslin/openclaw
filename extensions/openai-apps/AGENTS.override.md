@@ -2,8 +2,13 @@
 
 ## How To Test
 
-- Run the bundle test suite with Vitest: `pnpm test -- extensions/openai-apps/src`
-- Run the live integration harness in full mode: `./scripts/test-chatapps-integ.sh full`
+- Run focused bundle tests from the repo root with Vitest: `pnpm exec vitest run --config vitest.config.ts extensions/openai-apps/src/<test-file>.test.ts`
+- Run the full bundle unit test slice when the change spans multiple OpenAI Apps files: `pnpm test -- extensions/openai-apps/src`
+- Run the live integration harness through the extension entrypoint, not `./scripts/`:
+  - `./extensions/openai-apps/integ/test-chatapps-integ.sh simple` for list-tools plus Gmail
+  - `./extensions/openai-apps/integ/test-chatapps-integ.sh full` for list-tools plus Gmail, Linear, and Google Calendar read flows
+  - `./extensions/openai-apps/integ/test-chatapps-integ.sh write` for Google Calendar write-policy coverage, including `allowDestructiveActions=always` and `allowDestructiveActions=never`
+- The live harness writes artifacts under `/tmp/claw-chat-apps/`.
 
 ## Review-Ready Handoff
 
@@ -15,7 +20,7 @@
 
 - The integration harness runs under the dedicated OpenClaw profile `chatapps-integ`.
 - Before running the full integration test, make sure there is reusable `openai-codex` login state in a local OpenClaw profile. The harness will copy that auth into `chatapps-integ` when possible.
-- If no reusable `openai-codex` login is available, log in from an OpenClaw profile first, then rerun `./scripts/test-chatapps-integ.sh full`.
+- If no reusable `openai-codex` login is available, log in from an OpenClaw profile first, then rerun `./extensions/openai-apps/integ/test-chatapps-integ.sh <mode>`.
 
 ## Constant Overrides
 

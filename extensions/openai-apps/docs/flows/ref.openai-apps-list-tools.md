@@ -10,7 +10,7 @@ This flow documents how the `openai-apps` bundle boots, refreshes or reuses its 
 
 - `extensions/openai-apps/src/server.ts`: runtime bootstrap that resolves environment/config and starts the stdio MCP bridge
 - `extensions/openai-apps/src/mcp-bridge.ts`: MCP `listTools` handler plus per-process tool-cache management
-- `extensions/openai-apps/src/refresh-snapshot.ts`: snapshot freshness gate, auth projection, refresh, and persistence
+- `extensions/openai-apps/src/refresh-snapshot.ts`: snapshot refresh, auth projection, refresh, and persistence
 - `extensions/openai-apps/src/app-server-session.ts`: app-server session used only when snapshot refresh is required
 
 ## Call path
@@ -37,7 +37,6 @@ Ordered call path:
    await runChatgptAppsMcpBridgeStdio({
      loadOpenClawConfig: () => config,
      env: runtimeEnv,
-     hardRefresh: hasHardRefreshFlag(process.argv.slice(2), runtimeEnv),
    })
    ```
 2. Register the MCP request handlers and route `tools/list` into `listTools()`.
@@ -63,19 +62,18 @@ Ordered call path:
 
 State transitions / outputs:
 
-- Input: runtime env, raw OpenClaw config, optional `--hard-refresh`
+- Input: runtime env and raw OpenClaw config
 - Output: connected MCP bridge with a live `ListToolsRequestSchema` handler
 
 Branch points:
 
 - `request.params?.cursor` returns an empty page instead of rebuilding the tool list.
-- `hasHardRefreshFlag(...)` converts CLI/env state into a one-shot hard refresh request.
 
 External boundaries:
 
 - MCP stdio transport via `StdioServerTransport`
 
-### Phase 2: Resolve publication state and snapshot freshness
+### Phase 2: Resolve publication state and snapshot reuse
 
 Trigger / entry condition:
 
@@ -88,7 +86,7 @@ Entrypoints:
 
 Ordered call path:
 
-1. Resolve plugin config and projected auth before any freshness decision.
+1. Resolve plugin config and projected auth before any publication decision.
    ```ts
    // Source: extensions/openai-apps/src/mcp-bridge.ts#L268-L283
    // Source: extensions/openai-apps/src/refresh-snapshot.ts#L59-L107
@@ -102,18 +100,17 @@ Ordered call path:
      await writeRefreshDebug({ statePaths, debug: { status: "failure", message: auth.message } })
      return { status: "error", reason: "auth", ... }
    ```
-2. Reuse a persisted snapshot when its identity, config, base URL, and TTL still match.
+2. Reuse a persisted snapshot when its identity, base URL, and TTL still match.
    ```ts
    // Source: extensions/openai-apps/src/refresh-snapshot.ts#L109-L143
    // Source: extensions/openai-apps/src/snapshot-cache.ts#L112-L133
    currentSnapshot := await readPersistedSnapshot(statePaths.snapshotPath)
-   freshnessInputs := {
+   reuseInputs := {
      accountId: auth.accountId,
      authIdentityKey: buildAuthIdentityKey(auth.identity),
-     configHash: hashChatgptAppsConfig(config),
      baseUrlHash: hashChatgptBaseUrl(),
    }
-   if currentSnapshot && !params.hardRefresh && isSnapshotFresh({ snapshot: currentSnapshot, inputs: freshnessInputs, now: now() })
+   if currentSnapshot && isSnapshotFresh({ snapshot: currentSnapshot, inputs: reuseInputs, now: now() })
      await writeRefreshDebug({ statePaths, debug: { status: "success", source: "cache", accountId: auth.accountId } })
      return { status: "ok", source: "cache", snapshot: currentSnapshot, config, ... }
    ```
@@ -158,7 +155,6 @@ Ordered call path:
      projectedAt: capture.projectedAt,
      accountId: auth.accountId,
      authIdentityKey: buildAuthIdentityKey(auth.identity),
-     configHash: hashChatgptAppsConfig(config),
      baseUrlHash: hashChatgptBaseUrl(),
      connectors: deriveConnectorRecordsFromApps(capture.apps),
    }
@@ -267,11 +263,10 @@ External boundaries:
 
 ### Core state / ordering risks
 
-- `config`: resolved from `openclawConfig.plugins.entries["openai-apps"].config` in `ensureFreshSnapshot` before any snapshot freshness check, so cache reuse is always keyed against the same config instance that later drives connector allowlisting.
-- `auth`: projected in `ensureFreshSnapshot` before `readPersistedSnapshot(...)` freshness evaluation, so `accountId` and `authIdentityKey` are initialized before the cached snapshot is accepted or rejected.
+- `config`: resolved from `openclawConfig.plugins.entries["openai-apps"].config` in `ensureFreshSnapshot` before any publication decision, so cache reuse and connector allowlisting see the same resolved config.
+- `auth`: projected in `ensureFreshSnapshot` before `readPersistedSnapshot(...)` evaluation, so `accountId` and `authIdentityKey` are initialized before the cached snapshot is accepted or rejected.
 - `snapshot`: loaded from `statePaths.snapshotPath`, then either reused or replaced before `getToolCache(...)` consumes it; `listTools()` never builds tools from a half-refreshed snapshot.
-- `toolCache`: keyed by `computeSnapshotKey(snapshot)` plus `hashChatgptAppsConfig(config)` in `getToolCache(...)`, so route publication is frozen per bridge instance until snapshot or config identity changes.
-- `hardRefreshRequested`: consumed once via `consumeHardRefresh()` before `ensureFreshSnapshot(...)`, so only the next publication pass forces a refresh.
+- `toolCache`: keyed by the current snapshot plus the resolved config in `getToolCache(...)`, so route publication is frozen per bridge instance until either input changes.
 
 ### Runtime controls (or `None identified`)
 
@@ -280,13 +275,12 @@ External boundaries:
 | `plugins.entries["openai-apps"].config.enabled`                    | config  | `extensions/openai-apps/src/refresh-snapshot.ts#L61-L76`                                                     | Disables publication before auth, cache, or refresh work runs.                                 |
 | `plugins.entries["openai-apps"].config.connectors`                 | config  | `extensions/openai-apps/src/config.ts#L73-L85`, `extensions/openai-apps/src/mcp-bridge.ts#L50-L116`          | Controls wildcard enablement, explicit disables, and which connector records become MCP tools. |
 | `plugins.entries["openai-apps"].config.appServer.command/args`     | config  | `extensions/openai-apps/src/config.ts#L77-L84`, `extensions/openai-apps/src/app-server-session.ts#L132-L147` | Chooses which app-server binary/session is used for snapshot refresh.                          |
-| `--hard-refresh` / `OPENCLAW_OPENAI_APPS_HARD_REFRESH=1`           | CLI/env | `extensions/openai-apps/src/server.ts#L15-L17`                                                               | Forces the next `ensureFreshSnapshot(...)` call to skip snapshot reuse.                        |
 | `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_AGENT_DIR` | env     | `extensions/openai-apps/src/runtime-env.ts#L152-L191`, `extensions/openai-apps/src/state-paths.ts#L14-L42`   | Changes where config, auth store, snapshot, and refresh-debug files are resolved.              |
 | `OPENCLAW_OPENAI_APPS_DEBUG=1`                                     | env     | `extensions/openai-apps/src/server.ts#L8-L13`                                                                | Emits bundle bootstrap debug logs to stderr.                                                   |
 
 ### Notable gates
 
-- `auth.status === "ok"`: gates both snapshot reuse and snapshot refresh because freshness inputs depend on account and identity (`extensions/openai-apps/src/refresh-snapshot.ts#L78-L107`).
+- `auth.status === "ok"`: gates both snapshot reuse and snapshot refresh because account and identity are required for publication decisions (`extensions/openai-apps/src/refresh-snapshot.ts#L78-L107`).
 - `isSnapshotFresh(...)`: decides whether `listTools` stays local or opens a full app-server session (`extensions/openai-apps/src/refresh-snapshot.ts#L117-L143`).
 - `shouldExcludeConnectorId(...)`: blocks internal collab/general-agent style connector ids from publication even under wildcard enablement (`extensions/openai-apps/src/mcp-bridge.ts#L100-L113`, `extensions/openai-apps/src/connector-record.ts#L17-L60`).
 - `assertValidPersistedConnectorRecord(...)`: prevents malformed snapshot records from becoming published tools (`extensions/openai-apps/src/connector-record.ts#L217-L243`).
@@ -348,7 +342,7 @@ Logs:
 
 ## Related docs
 
-- `extensions/openai-apps/docs/flows/topic.openai-apps-call-tool.md`
+- `extensions/openai-apps/docs/flows/ref.openai-apps-call-tool.md`
 
 ## Manual Notes
 
@@ -357,3 +351,4 @@ Logs:
 ## Changelog
 
 - 2026-03-30: Created the `listTools` flow doc from `extensions/openai-apps` code only (019d3ffc-456e-7500-84dc-309b365ada15 - 966651ecb7)
+- 2026-03-30: Renamed the flow doc to `ref.openai-apps-list-tools.md` and updated publication-state wording. (019d4105-802e-7bd0-be7e-850070d63c37 - d78a1f3059)

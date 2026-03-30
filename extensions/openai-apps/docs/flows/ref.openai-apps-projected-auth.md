@@ -330,9 +330,9 @@ Logs:
 
 ## Related docs
 
-- `extensions/openai-apps/docs/flows/topic.openai-apps-runtime-env.md`
-- `extensions/openai-apps/docs/flows/topic.openai-apps-list-tools.md`
-- `extensions/openai-apps/docs/flows/topic.openai-apps-call-tool.md`
+- `extensions/openai-apps/docs/flows/ref.openai-apps-runtime-env.md`
+- `extensions/openai-apps/docs/flows/ref.openai-apps-list-tools.md`
+- `extensions/openai-apps/docs/flows/ref.openai-apps-call-tool.md`
 
 ## Manual Notes
 
@@ -341,3 +341,4 @@ Logs:
 ## Changelog
 
 - 2026-03-30: Created the projected auth flow doc (019d3ffc-456e-7500-84dc-309b365ada15 - 966651ecb7)
+- 2026-03-30: Renamed the flow doc to `ref.openai-apps-projected-auth.md` and updated related links. (019d4105-802e-7bd0-be7e-850070d63c37 - d78a1f3059)

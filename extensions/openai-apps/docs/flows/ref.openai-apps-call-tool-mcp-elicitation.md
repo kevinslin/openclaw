@@ -317,8 +317,8 @@ Logs:
 
 ## Related docs
 
-- `extensions/openai-apps/docs/flows/topic.openai-apps-call-tool.md`
-- `extensions/openai-apps/docs/flows/topic.openai-apps-projected-auth.md`
+- `extensions/openai-apps/docs/flows/ref.openai-apps-call-tool.md`
+- `extensions/openai-apps/docs/flows/ref.openai-apps-projected-auth.md`
 
 ## Manual Notes
 

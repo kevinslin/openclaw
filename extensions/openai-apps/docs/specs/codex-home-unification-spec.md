@@ -72,7 +72,7 @@ connector snapshot.
 
 ### Required Pre-Read
 
-- `extensions/openai-apps/docs/flows/topic.openai-apps-call-tool.md`
+- `extensions/openai-apps/docs/flows/ref.openai-apps-call-tool.md`
 - `docs/specs/2026-03-chatgpt-apps/app-server-only-publication-spec.md`
 - `docs/specs/2026-03-chatgpt-apps/app-list-only-snapshot-spec.md`
 - `extensions/openai-apps/src/state-paths.ts`
@@ -163,7 +163,7 @@ This keeps the architecture simpler:
   warmup if the new contract writes config before the thread starts.
 - `extensions/openai-apps/src/app-server-session.test.ts`
   Why: reuse or factor common expectations around login plus config write.
-- `extensions/openai-apps/docs/flows/topic.openai-apps-call-tool.md`
+- `extensions/openai-apps/docs/flows/ref.openai-apps-call-tool.md`
   Why: document the current split and then the post-change unified model.
 - `extensions/openai-apps/README.md`
   Why: document the bundle-owned runtime state and remove any implication that
@@ -318,7 +318,7 @@ Manual validation:
 
 - [x] `pnpm test -- extensions/openai-apps/src` passed on 2026-03-30 with 11
       test files passed, 42 tests passed, and 1 existing todo.
-- [x] `python3 /Users/kevinlin/.codex/skills/specy/scripts/validate_flow_doc.py --kind auto --doc /Users/kevinlin/code/openclaw/extensions/openai-apps/docs/flows/topic.openai-apps-call-tool.md`
+- [x] `python3 /Users/kevinlin/.codex/skills/specy/scripts/validate_flow_doc.py --kind auto --doc /Users/kevinlin/code/openclaw/extensions/openai-apps/docs/flows/ref.openai-apps-call-tool.md`
       passed on 2026-03-30.
 - [x] `./scripts/test-chatapps-integ.sh simple` passed on 2026-03-30: it
       published 18 tools and completed a Gmail invocation through the
