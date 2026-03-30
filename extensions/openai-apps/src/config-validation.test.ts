@@ -11,7 +11,6 @@ describe("openai-apps bundle config validation", () => {
             enabled: true,
             config: {
               enabled: true,
-              appInvokePath: "appServer",
               connectors: {
                 gmail: {
                   enabled: true,

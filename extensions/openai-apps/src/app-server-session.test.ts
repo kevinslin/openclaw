@@ -11,7 +11,6 @@ type LoginAccountResponse = protocol.v2.LoginAccountResponse;
 
 const config: ChatgptAppsConfig = {
   enabled: true,
-  appInvokePath: "appServer",
   appServer: {
     command: "codex",
     args: [],
@@ -35,72 +34,72 @@ const statePaths: ChatgptAppsStatePaths = {
 };
 
 describe("captureAppServerSnapshot", () => {
-  it("keeps inventory refresh successful when mcpServerStatus/list fails", async () => {
+  it("fails when mcpServerStatus/list is unavailable", async () => {
     const closeCalls: string[] = [];
 
-    const result = await captureAppServerSnapshot({
-      config,
-      statePaths,
-      resolveProjectedAuth: async () => ({
-        status: "ok",
-        accessToken: "access-token",
-        accountId: "acct_123",
-        planType: null,
-        profileId: "openai-codex:default",
-        identity: { email: "user@example.com", profileName: "user@example.com" },
-      }),
-      clientFactory: async () => ({
-        initializeSession: async () => {},
-        handleChatgptAuthTokensRefresh: () => () => {},
-        loginAccount: async (): Promise<LoginAccountResponse> => ({
-          type: "chatgptAuthTokens",
-        }),
-        readAccount: async (): Promise<GetAccountResponse> => ({
-          account: null,
-          requiresOpenaiAuth: false,
-        }),
-        getAuthStatus: async (): Promise<GetAuthStatusResponse> => ({
-          authMethod: "chatgpt",
-          authToken: null,
-          requiresOpenaiAuth: false,
-        }),
-        listApps: async () => ({
-          data: [
-            {
-              id: "gmail",
-              name: "Gmail",
-              description: null,
-              logoUrl: null,
-              logoUrlDark: null,
-              distributionChannel: null,
-              branding: null,
-              appMetadata: null,
-              labels: null,
-              installUrl: null,
-              isAccessible: true,
-              isEnabled: true,
-              pluginDisplayNames: ["Gmail"],
-            },
-          ],
-          nextCursor: null,
-        }),
-        listMcpServerStatus: async () => {
-          throw new Error("status unavailable");
-        },
-        writeConfigValue: async (): Promise<ConfigWriteResponse> => ({
+    await expect(
+      captureAppServerSnapshot({
+        config,
+        statePaths,
+        resolveProjectedAuth: async () => ({
           status: "ok",
-          version: "1",
-          filePath: "/tmp/openclaw-chatgpt-apps/config.toml",
-          overriddenMetadata: null,
+          accessToken: "access-token",
+          accountId: "acct_123",
+          planType: null,
+          profileId: "openai-codex:default",
+          identity: { email: "user@example.com", profileName: "user@example.com" },
         }),
-        close: async () => {
-          closeCalls.push("closed");
-        },
+        clientFactory: async () => ({
+          initializeSession: async () => {},
+          handleChatgptAuthTokensRefresh: () => () => {},
+          loginAccount: async (): Promise<LoginAccountResponse> => ({
+            type: "chatgptAuthTokens",
+          }),
+          readAccount: async (): Promise<GetAccountResponse> => ({
+            account: null,
+            requiresOpenaiAuth: false,
+          }),
+          getAuthStatus: async (): Promise<GetAuthStatusResponse> => ({
+            authMethod: "chatgpt",
+            authToken: null,
+            requiresOpenaiAuth: false,
+          }),
+          listApps: async () => ({
+            data: [
+              {
+                id: "gmail",
+                name: "Gmail",
+                description: null,
+                logoUrl: null,
+                logoUrlDark: null,
+                distributionChannel: null,
+                branding: null,
+                appMetadata: null,
+                labels: null,
+                installUrl: null,
+                isAccessible: true,
+                isEnabled: true,
+                pluginDisplayNames: ["Gmail"],
+              },
+            ],
+            nextCursor: null,
+          }),
+          listMcpServerStatus: async () => {
+            throw new Error("status unavailable");
+          },
+          writeConfigValue: async (): Promise<ConfigWriteResponse> => ({
+            status: "ok",
+            version: "1",
+            filePath: "/tmp/openclaw-chatgpt-apps/config.toml",
+            overriddenMetadata: null,
+          }),
+          close: async () => {
+            closeCalls.push("closed");
+          },
+        }),
       }),
-    });
+    ).rejects.toThrow("status unavailable");
 
-    expect(result.inventory).toHaveLength(1);
-    expect(result.statuses).toEqual([]);
     expect(closeCalls).toEqual(["closed"]);
   });
 });

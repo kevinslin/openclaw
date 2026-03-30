@@ -171,7 +171,7 @@ export async function captureAppServerSnapshot(params: {
       appCursor = response.nextCursor;
     } while (appCursor);
 
-    const statuses = await listMcpServerStatusesBestEffort(client);
+    const statuses = await listMcpServerStatuses(client);
 
     const [accountResponse, authStatus] = await Promise.all([
       client.readAccount({ refreshToken: false }),
@@ -191,9 +191,7 @@ export async function captureAppServerSnapshot(params: {
   }
 }
 
-async function listMcpServerStatusesBestEffort(
-  client: ChatgptAppsRpcClient,
-): Promise<McpServerStatus[]> {
+async function listMcpServerStatuses(client: ChatgptAppsRpcClient): Promise<McpServerStatus[]> {
   const listStatuses = async (): Promise<McpServerStatus[]> => {
     const statuses: McpServerStatus[] = [];
     let statusCursor: string | null = null;
@@ -207,18 +205,12 @@ async function listMcpServerStatusesBestEffort(
     return statuses;
   };
 
-  try {
-    return await Promise.race([
-      listStatuses(),
-      new Promise<McpServerStatus[]>((_, reject) => {
-        setTimeout(() => {
-          reject(new Error("Timed out reading mcpServerStatus/list"));
-        }, MCP_SERVER_STATUS_TIMEOUT_MS);
-      }),
-    ]);
-  } catch {
-    // Tool publication can fall back to the remote apps endpoint when the local
-    // status snapshot is unavailable. Keep inventory refresh successful.
-    return [];
-  }
+  return await Promise.race([
+    listStatuses(),
+    new Promise<McpServerStatus[]>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error("Timed out reading mcpServerStatus/list"));
+      }, MCP_SERVER_STATUS_TIMEOUT_MS);
+    }),
+  ]);
 }

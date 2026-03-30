@@ -10,17 +10,11 @@ import {
 import { resolveAppServerCommand } from "./app-server-command.js";
 import type { ChatgptAppsResolvedAuth } from "./auth-projector.js";
 import { buildDerivedAppsConfig, type ChatgptAppsConfig } from "./config.js";
-import {
-  createRemoteCodexAppsClient,
-  type RemoteCodexAppsClient,
-  type RemoteCodexAppsClientFactory,
-} from "./remote-codex-apps-client.js";
 import type { ChatgptAppsStatePaths } from "./state-paths.js";
 
-type AppInfo = protocol.v2.AppInfo;
-type AppsListResponse = protocol.v2.AppsListResponse;
 type ConfigValueWriteParams = protocol.v2.ConfigValueWriteParams;
 type ConfigWriteResponse = protocol.v2.ConfigWriteResponse;
+type AppsListResponse = protocol.v2.AppsListResponse;
 type GetAuthStatusResponse = protocol.GetAuthStatusResponse;
 type GetAccountResponse = protocol.v2.GetAccountResponse;
 type LoginAccountParams = protocol.v2.LoginAccountParams;
@@ -54,16 +48,12 @@ function writeDebugLog(
 
 export type AppServerInvocationRoute = {
   connectorId: string;
-  remoteName: string;
   publishedName: string;
-  appId: string;
   appName: string;
   appInvocationToken: string;
 };
 
 type ProjectedAuthResolver = () => Promise<ChatgptAppsResolvedAuth>;
-
-type DynamicToolCallResponse = protocol.v2.DynamicToolCallResponse;
 
 export type AppServerInvocationClient = {
   initializeSession(): Promise<unknown>;
@@ -141,7 +131,6 @@ export type AppServerToolInvoker = (params: {
     cwd?: string;
     env: NodeJS.ProcessEnv;
   }) => Promise<AppServerInvocationClient>;
-  remoteClientFactory?: RemoteCodexAppsClientFactory;
 }) => Promise<CallToolResult>;
 
 function toLoginParams(
@@ -155,34 +144,31 @@ function toLoginParams(
   };
 }
 
-function stringifyArgs(args: Record<string, unknown> | undefined): string {
-  return JSON.stringify(args ?? {}, null, 2);
+function readInvocationRequest(args: Record<string, unknown> | undefined): string {
+  const request = typeof args?.request === "string" ? args.request.trim() : "";
+  if (!request) {
+    throw new Error('ChatGPT app tools require a non-empty "request" string');
+  }
+  return request;
 }
 
 function buildInvocationInput(
   route: AppServerInvocationRoute,
   args: Record<string, unknown> | undefined,
-) {
-  const text =
-    `$${route.appInvocationToken} Use the mentioned app to execute this request.\n\n` +
-    `Published local tool: ${route.publishedName}\n` +
-    `Requested connector: ${route.connectorId}\n` +
-    `Requested app tool: ${route.remoteName}\n` +
-    `Arguments JSON:\n${stringifyArgs(args)}\n\n` +
-    "Return the result directly. If the app needs user input or approval, say exactly what is needed.";
-
+): UserInput[] {
+  const request = readInvocationRequest(args);
   return [
     {
       type: "text",
-      text,
+      text: `$${route.appInvocationToken} ${request}`,
       text_elements: [],
     },
     {
       type: "mention",
       name: route.appName,
-      path: `app://${route.appId}`,
+      path: `app://${route.connectorId}`,
     },
-  ] satisfies UserInput[];
+  ];
 }
 
 function formatQuestionPrompts(
@@ -192,24 +178,6 @@ function formatQuestionPrompts(
     .map((question) => question.question)
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     .join(" ");
-}
-
-async function listAppsForThread(
-  client: AppServerInvocationClient,
-  threadId: string,
-): Promise<AppInfo[]> {
-  const apps: AppInfo[] = [];
-  let cursor: string | null = null;
-  do {
-    const response = await client.listApps({
-      cursor,
-      threadId,
-      forceRefetch: false,
-    });
-    apps.push(...response.data);
-    cursor = response.nextCursor;
-  } while (cursor);
-  return apps;
 }
 
 function extractTurnText(response: ThreadReadResponse, turnId: string): string | null {
@@ -248,34 +216,14 @@ function buildApprovalError(prefix: string, detail?: string | null): Error {
   return new Error(detail ? `${prefix}: ${detail}` : prefix);
 }
 
-function buildDynamicToolCallResponse(result: CallToolResult): DynamicToolCallResponse {
-  const contentItems = result.content.flatMap((item) => {
-    if (item.type === "text") {
-      return [{ type: "inputText" as const, text: item.text }];
-    }
-    return [{ type: "inputText" as const, text: JSON.stringify(item, null, 2) }];
-  });
-
-  if (contentItems.length === 0 && result.structuredContent !== undefined) {
-    contentItems.push({
-      type: "inputText",
-      text: JSON.stringify(result.structuredContent, null, 2),
-    });
-  }
-
-  return {
-    contentItems,
-    success: result.isError !== true,
-  };
-}
-
 export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
   const env = params.env ?? process.env;
   writeDebugLog(
     env,
-    `invoke start connector=${params.route.connectorId} remote=${params.route.remoteName} published=${params.route.publishedName}`,
+    `invoke start connector=${params.route.connectorId} published=${params.route.publishedName}`,
     params.statePaths.rootDir,
   );
+
   const auth = await params.resolveProjectedAuth();
   if (auth.status !== "ok") {
     throw new Error(auth.message);
@@ -291,8 +239,8 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
     `app-server command resolved command=${resolvedCommand} args=${params.config.appServer.args.join(" ")}`,
     params.statePaths.rootDir,
   );
+
   await mkdir(params.statePaths.codexHomeDir, { recursive: true });
-  writeDebugLog(env, "app-server codex home ensured", params.statePaths.rootDir);
   const clientFactory =
     params.clientFactory ??
     (async (factoryParams) => {
@@ -321,7 +269,7 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
         listApps: (listParams) => client.listApps(listParams),
         runTurn: (turnParams, options) => client.runTurn(turnParams, options),
         readThread: (readParams) => client.readThread(readParams),
-        handleServerRequest: (method, handlerFn) => client.handleServerRequest(method, handlerFn),
+        handleServerRequest: (method, handler) => client.handleServerRequest(method, handler),
         onStderr: (listener) => client.onStderr(listener),
         onClose: (listener) => client.onClose(listener),
         close: async () => {
@@ -330,7 +278,6 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
       } satisfies AppServerInvocationClient;
     });
 
-  writeDebugLog(env, "app-server spawning client", params.statePaths.rootDir);
   const client = await clientFactory({
     command: resolvedCommand,
     args: params.config.appServer.args,
@@ -340,12 +287,10 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
       CODEX_HOME: params.statePaths.codexHomeDir,
     },
   });
-  writeDebugLog(env, "app-server client spawned", params.statePaths.rootDir);
 
   let unsubscribeRefresh: (() => void) | null = null;
   const unsubscribeHandlers: Array<() => void> = [];
   const unsubscribeDebugListeners: Array<() => void> = [];
-  const remoteClientRef: { current: RemoteCodexAppsClient | null } = { current: null };
   try {
     if (client.onStderr) {
       unsubscribeDebugListeners.push(
@@ -365,10 +310,11 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
         }),
       );
     }
+
+    writeDebugLog(env, "app-server initialize start", params.statePaths.rootDir);
     await client.initializeSession();
-    writeDebugLog(env, "app-server session initialized", params.statePaths.rootDir);
+    writeDebugLog(env, "app-server initialize done", params.statePaths.rootDir);
     unsubscribeRefresh = client.handleChatgptAuthTokensRefresh(async () => {
-      writeDebugLog(env, "app-server requested auth refresh", params.statePaths.rootDir);
       const refreshed = await params.resolveProjectedAuth();
       if (refreshed.status !== "ok") {
         throw new Error(refreshed.message);
@@ -380,15 +326,17 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
       };
     });
 
+    writeDebugLog(env, "app-server login start", params.statePaths.rootDir);
     await client.loginAccount(toLoginParams(auth));
-    writeDebugLog(env, "app-server login complete", params.statePaths.rootDir);
+    writeDebugLog(env, "app-server login done", params.statePaths.rootDir);
+    writeDebugLog(env, "app-server config write start", params.statePaths.rootDir);
     await client.writeConfigValue({
       keyPath: "apps",
       value: buildDerivedAppsConfig(params.config) as protocol.v2.ConfigValueWriteParams["value"],
       mergeStrategy: "replace",
       expectedVersion: null,
     });
-    writeDebugLog(env, "app-server config write complete", params.statePaths.rootDir);
+    writeDebugLog(env, "app-server config write done", params.statePaths.rootDir);
 
     let serverRequestError: Error | null = null;
     const registerFailureHandler = <M extends protocol.ServerRequest["method"]>(
@@ -397,7 +345,6 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
     ) => {
       unsubscribeHandlers.push(
         client.handleServerRequest(method, async (context) => {
-          writeDebugLog(env, `app-server request ${method}`, params.statePaths.rootDir);
           const error = buildError(context);
           serverRequestError ??= error;
           throw error;
@@ -423,51 +370,8 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
     registerFailureHandler("mcpServer/elicitation/request", () =>
       buildApprovalError("App invocation requested MCP elicitation"),
     );
-    unsubscribeHandlers.push(
-      client.handleServerRequest("item/tool/call", async (context) => {
-        writeDebugLog(
-          env,
-          `app-server request item/tool/call tool=${context.request.params.tool}`,
-          params.statePaths.rootDir,
-        );
-        remoteClientRef.current ??= await (
-          params.remoteClientFactory ?? createRemoteCodexAppsClient
-        )({
-          auth: {
-            accessToken: auth.accessToken,
-            accountId: auth.accountId,
-          },
-        });
-        try {
-          const remoteArgs = context.request.params.arguments;
-          const result = await remoteClientRef.current.callTool({
-            name: context.request.params.tool,
-            arguments:
-              remoteArgs && typeof remoteArgs === "object" && !Array.isArray(remoteArgs)
-                ? (remoteArgs as Record<string, unknown>)
-                : undefined,
-            _meta: undefined,
-          });
-          writeDebugLog(
-            env,
-            `app-server tool result tool=${context.request.params.tool} isError=${String(
-              result.isError === true,
-            )}`,
-            params.statePaths.rootDir,
-          );
-          return buildDynamicToolCallResponse(result);
-        } catch (error) {
-          const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
-          writeDebugLog(
-            env,
-            `app-server tool call failed tool=${context.request.params.tool} error=${message}`,
-            params.statePaths.rootDir,
-          );
-          throw error;
-        }
-      }),
-    );
 
+    writeDebugLog(env, "app-server thread start request", params.statePaths.rootDir);
     const threadStart = await client.startThread({
       cwd: params.workspaceDir ?? null,
       ephemeral: false,
@@ -476,40 +380,12 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
     });
     const threadId = threadStart.thread.id;
     writeDebugLog(env, `app-server thread started threadId=${threadId}`, params.statePaths.rootDir);
-    let threadAppName = params.route.appName;
-    try {
-      const threadApps = await listAppsForThread(client, threadId);
-      const threadApp = threadApps.find((app) => app.id === params.route.appId);
-      if (!threadApp || !threadApp.isAccessible || !threadApp.isEnabled) {
-        throw new Error(
-          `App ${params.route.appId} is not accessible and enabled on the invocation thread`,
-        );
-      }
-      threadAppName = threadApp.name || params.route.appName;
-      writeDebugLog(
-        env,
-        `app-server thread app resolved appId=${threadApp.id} appName=${threadApp.name}`,
-        params.statePaths.rootDir,
-      );
-    } catch (error) {
-      const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
-      writeDebugLog(
-        env,
-        `app-server thread app lookup skipped error=${message}`,
-        params.statePaths.rootDir,
-      );
-    }
 
+    writeDebugLog(env, "app-server turn start", params.statePaths.rootDir);
     const run = await client.runTurn(
       {
         threadId,
-        input: buildInvocationInput(
-          {
-            ...params.route,
-            appName: threadAppName,
-          },
-          params.args,
-        ),
+        input: buildInvocationInput(params.route, params.args),
       },
       { timeoutMs: TURN_TIMEOUT_MS },
     );
@@ -536,8 +412,8 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
     if (!text) {
       throw new Error("App invocation completed without a usable final result");
     }
-    writeDebugLog(env, "app-server invocation produced final text", params.statePaths.rootDir);
 
+    writeDebugLog(env, "app-server invocation produced final text", params.statePaths.rootDir);
     return {
       content: [{ type: "text", text }],
     };
@@ -553,9 +429,6 @@ export const invokeViaAppServer: AppServerToolInvoker = async (params) => {
       unsubscribe();
     }
     unsubscribeRefresh?.();
-    if (remoteClientRef.current) {
-      await remoteClientRef.current.close();
-    }
     await client.close();
   }
 };

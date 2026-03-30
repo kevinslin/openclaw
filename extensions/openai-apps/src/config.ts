@@ -20,11 +20,8 @@ const DEFAULT_APP_SERVER_COMMAND = "codex";
 const DEFAULT_LINK_WAIT_TIMEOUT_MS = 60_000;
 const DEFAULT_LINK_POLL_INTERVAL_MS = 3_000;
 
-export type AppInvokePath = "appServer" | "remoteMCP";
-
 export type ChatgptAppsConfig = {
   enabled: boolean;
-  appInvokePath: AppInvokePath;
   appServer: {
     command: string;
     args: string[];
@@ -60,10 +57,6 @@ function normalizePositiveInteger(value: unknown, fallback: number): number {
     }
   }
   return fallback;
-}
-
-function normalizeAppInvokePath(value: unknown): AppInvokePath {
-  return value === "remoteMCP" ? "remoteMCP" : "appServer";
 }
 
 function normalizeAppServerArgs(value: unknown): string[] {
@@ -104,7 +97,6 @@ export function resolveChatgptAppsConfig(pluginConfig: unknown): ChatgptAppsConf
 
   return {
     enabled: typeof raw.enabled === "boolean" ? raw.enabled : false,
-    appInvokePath: normalizeAppInvokePath(raw.appInvokePath),
     appServer: {
       command: normalizeNonEmptyString(appServer.command) ?? DEFAULT_APP_SERVER_COMMAND,
       args: normalizeAppServerArgs(appServer.args),

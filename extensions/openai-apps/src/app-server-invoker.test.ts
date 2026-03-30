@@ -6,7 +6,6 @@ import type { ChatgptAppsStatePaths } from "./state-paths.js";
 
 const config: ChatgptAppsConfig = {
   enabled: true,
-  appInvokePath: "appServer",
   appServer: {
     command: "codex",
     args: [],
@@ -100,8 +99,9 @@ function createThreadReadResponse(items: protocol.v2.ThreadItem[]): protocol.v2.
 
 function createMockClient(
   overrides: Partial<AppServerInvocationClient> = {},
+  registeredMethods: string[] = [],
 ): AppServerInvocationClient {
-  const serverRequestHandlers = new Map<string, (context: unknown) => Promise<unknown> | unknown>();
+  const handlers = new Map<string, (context: unknown) => Promise<unknown> | unknown>();
   return {
     initializeSession: async () => ({}),
     handleChatgptAuthTokensRefresh: () => () => {},
@@ -168,12 +168,10 @@ function createMockClient(
         },
       ]),
     handleServerRequest: (method, handler) => {
-      serverRequestHandlers.set(
-        method,
-        handler as (context: unknown) => Promise<unknown> | unknown,
-      );
+      registeredMethods.push(method);
+      handlers.set(method, handler as (context: unknown) => Promise<unknown> | unknown);
       return () => {
-        serverRequestHandlers.delete(method);
+        handlers.delete(method);
       };
     },
     close: async () => {},
@@ -182,7 +180,7 @@ function createMockClient(
 }
 
 describe("invokeViaAppServer", () => {
-  it("creates a fresh thread and starts a turn with an app mention", async () => {
+  it("creates a fresh thread and starts a turn with a connector mention", async () => {
     const startThread = vi.fn<AppServerInvocationClient["startThread"]>(async () =>
       createThreadStartResponse(),
     );
@@ -205,23 +203,18 @@ describe("invokeViaAppServer", () => {
         },
       },
     }));
-
-    const client = createMockClient({
-      startThread,
-      runTurn,
-    });
+    const registeredMethods: string[] = [];
+    const client = createMockClient({ startThread, runTurn }, registeredMethods);
 
     const result = await invokeViaAppServer({
       config,
       route: {
         connectorId: "gmail",
-        remoteName: "gmail_search_emails",
-        publishedName: "chatgpt_app__gmail__gmail_search_emails",
-        appId: "gmail",
+        publishedName: "chatgpt_app_gmail",
         appName: "Gmail",
         appInvocationToken: "gmail",
       },
-      args: { query: "in:inbox" },
+      args: { request: "Summarize my recent emails" },
       statePaths,
       resolveProjectedAuth: async () => ({
         status: "ok",
@@ -249,7 +242,7 @@ describe("invokeViaAppServer", () => {
         input: [
           expect.objectContaining({
             type: "text",
-            text: expect.stringContaining("$gmail"),
+            text: "$gmail Summarize my recent emails",
           }),
           {
             type: "mention",
@@ -260,6 +253,7 @@ describe("invokeViaAppServer", () => {
       }),
       expect.any(Object),
     );
+    expect(registeredMethods).not.toContain("item/tool/call");
   });
 
   it("fails clearly when the app requests additional user input", async () => {
@@ -310,13 +304,11 @@ describe("invokeViaAppServer", () => {
         config,
         route: {
           connectorId: "gmail",
-          remoteName: "gmail_search_emails",
-          publishedName: "chatgpt_app__gmail__gmail_search_emails",
-          appId: "gmail",
+          publishedName: "chatgpt_app_gmail",
           appName: "Gmail",
           appInvocationToken: "gmail",
         },
-        args: { query: "in:inbox" },
+        args: { request: "Summarize my recent emails" },
         statePaths,
         resolveProjectedAuth: async () => ({
           status: "ok",
@@ -331,6 +323,33 @@ describe("invokeViaAppServer", () => {
     ).rejects.toThrow("App invocation requires additional user input");
   });
 
+  it("fails when the request payload is missing", async () => {
+    const client = createMockClient();
+
+    await expect(
+      invokeViaAppServer({
+        config,
+        route: {
+          connectorId: "gmail",
+          publishedName: "chatgpt_app_gmail",
+          appName: "Gmail",
+          appInvocationToken: "gmail",
+        },
+        args: {},
+        statePaths,
+        resolveProjectedAuth: async () => ({
+          status: "ok",
+          accessToken: "access-token",
+          accountId: "acct_123",
+          planType: null,
+          profileId: "openai-codex:default",
+          identity: { email: "user@example.com", profileName: "user@example.com" },
+        }),
+        clientFactory: async () => client,
+      }),
+    ).rejects.toThrow('ChatGPT app tools require a non-empty "request" string');
+  });
+
   it("fails when the completed turn has no usable final result", async () => {
     const client = createMockClient({
       readThread: async () => createThreadReadResponse([]),
@@ -341,13 +360,11 @@ describe("invokeViaAppServer", () => {
         config,
         route: {
           connectorId: "gmail",
-          remoteName: "gmail_search_emails",
-          publishedName: "chatgpt_app__gmail__gmail_search_emails",
-          appId: "gmail",
+          publishedName: "chatgpt_app_gmail",
           appName: "Gmail",
           appInvocationToken: "gmail",
         },
-        args: { query: "in:inbox" },
+        args: { request: "Summarize my recent emails" },
         statePaths,
         resolveProjectedAuth: async () => ({
           status: "ok",
@@ -360,102 +377,5 @@ describe("invokeViaAppServer", () => {
         clientFactory: async () => client,
       }),
     ).rejects.toThrow("App invocation completed without a usable final result");
-  });
-
-  it("fulfills item/tool/call requests through the remote apps client", async () => {
-    let dynamicToolCallHandler: ((context: unknown) => Promise<unknown> | unknown) | undefined;
-    const remoteCallTool = vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "matched 5 emails" }],
-    }));
-    const client = createMockClient({
-      handleServerRequest: (method, handler) => {
-        if (method === "item/tool/call") {
-          dynamicToolCallHandler = handler as (context: unknown) => Promise<unknown> | unknown;
-        }
-        return () => {};
-      },
-      runTurn: async () => {
-        await dynamicToolCallHandler?.({
-          request: {
-            params: {
-              threadId: "thr_123",
-              turnId: "turn_123",
-              callId: "call_123",
-              tool: "gmail_search_emails",
-              arguments: {
-                query: "in:inbox",
-              },
-            },
-          },
-        });
-        return {
-          start: {
-            turn: {
-              id: "turn_123",
-              items: [],
-              status: "inProgress",
-              error: null,
-            },
-          },
-          completed: {
-            threadId: "thr_123",
-            turn: {
-              id: "turn_123",
-              items: [],
-              status: "completed",
-              error: null,
-            },
-          },
-        };
-      },
-      readThread: async () =>
-        createThreadReadResponse([
-          {
-            type: "agentMessage",
-            id: "msg_1",
-            phase: "final_answer",
-            text: "Here are your 5 emails.",
-          },
-        ]),
-    });
-
-    const result = await invokeViaAppServer({
-      config,
-      route: {
-        connectorId: "gmail",
-        remoteName: "gmail_search_emails",
-        publishedName: "chatgpt_app__gmail__gmail_search_emails",
-        appId: "gmail",
-        appName: "Gmail",
-        appInvocationToken: "gmail",
-      },
-      args: { query: "in:inbox" },
-      statePaths,
-      resolveProjectedAuth: async () => ({
-        status: "ok",
-        accessToken: "access-token",
-        accountId: "acct_123",
-        planType: null,
-        profileId: "openai-codex:default",
-        identity: { email: "user@example.com", profileName: "user@example.com" },
-      }),
-      clientFactory: async () => client,
-      remoteClientFactory: async () => ({
-        listTools: async () => ({ tools: [] }),
-        callTool: remoteCallTool,
-        close: async () => {},
-      }),
-    });
-
-    expect(remoteCallTool).toHaveBeenCalledWith({
-      name: "gmail_search_emails",
-      arguments: {
-        query: "in:inbox",
-      },
-      _meta: undefined,
-    });
-    expect(result).toEqual({
-      content: [{ type: "text", text: "Here are your 5 emails." }],
-    });
   });
 });

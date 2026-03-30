@@ -213,9 +213,8 @@ describe("ensureFreshSnapshot", () => {
     });
 
     expect(failed).toMatchObject({
-      status: "error",
-      reason: "refresh",
-      message: "sidecar launch failed",
+      status: "ok",
+      source: "stale-cache",
     });
     const snapshot = await readPersistedSnapshot(statePaths.snapshotPath);
     expect(snapshot?.accountId).toBe("acct_123");

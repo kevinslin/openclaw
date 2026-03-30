@@ -6,12 +6,14 @@ Bundle-owned MCP bridge for exposing ChatGPT apps inside OpenClaw.
 
 This bundle:
 
-- publishes ChatGPT app tools into OpenClaw as MCP tools
-- uses `app/list` as the authoritative app inventory
-- reads OpenClaw-rooted `openai-codex` auth and projects it into the app-server when needed
+- publishes one local MCP tool per enabled ChatGPT app connector
+- uses `codex app-server` as the single authority for both tool publication and invocation
+- reads OpenClaw-rooted `openai-codex` auth and projects it into the spawned app-server session
 - caches connector inventory in the plugin runtime state directory and refreshes it on demand
 
-The bundle owns app exposure and app-specific config. It does not require changes under `src/`.
+Published tool names use the `chatgpt_app_<connectorId>` namespace. Each tool accepts a single natural-language `request` string and executes the app on a fresh app-server thread.
+
+The bundle owns app exposure and app-specific config. It does not require changes under repo-root `src/`.
 
 ## Install From Bundle
 
@@ -58,7 +60,6 @@ Example with one explicitly enabled connector:
         "enabled": true,
         "config": {
           "enabled": true,
-          "appInvokePath": "appServer",
           "connectors": {
             "gmail": {
               "enabled": true
@@ -86,7 +87,6 @@ To enable all accessible ChatGPT apps, use `*`:
         "enabled": true,
         "config": {
           "enabled": true,
-          "appInvokePath": "appServer",
           "connectors": {
             "*": {
               "enabled": true
@@ -99,7 +99,7 @@ To enable all accessible ChatGPT apps, use `*`:
 }
 ```
 
-You can combine wildcard enablement with explicit disables if needed:
+You can combine wildcard enablement with explicit disables:
 
 ```json
 {
@@ -109,7 +109,6 @@ You can combine wildcard enablement with explicit disables if needed:
         "enabled": true,
         "config": {
           "enabled": true,
-          "appInvokePath": "appServer",
           "connectors": {
             "*": {
               "enabled": true
@@ -128,11 +127,10 @@ You can combine wildcard enablement with explicit disables if needed:
 ## Config Reference
 
 - `enabled`: Turns the bundle-owned ChatGPT apps bridge on or off.
-- `appInvokePath`: Chooses how published tools execute. `appServer` is the default and starts a fresh app-server thread for each tool call. `remoteMCP` keeps the older direct remote MCP call path.
 - `connectors`: Per-app enablement map. Use explicit connector ids like `gmail`, `linear`, or `google_calendar`.
 - `connectors["*"]`: Enables all accessible ChatGPT apps, with explicit connector entries able to disable individual apps.
 - `appServer.command` / `appServer.args`: Override how the bundle launches `codex app-server`.
 - `linking.enabled`: Enables the auth-link polling flow for apps that require an interactive link step.
 - `linking.waitTimeoutMs` / `linking.pollIntervalMs`: Tune how long the bundle waits for that link flow to complete.
 
-The ChatGPT apps endpoint is internal to the bundle and is no longer configurable.
+The ChatGPT apps endpoint is internal to the bundle and is not configurable.
