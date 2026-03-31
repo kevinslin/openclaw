@@ -9,5 +9,10 @@
     "@modelcontextprotocol/sdk": "1.28.0",
     "codex-app-server-sdk": "0.1.0",
     "tsx": "^4.21.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./src/server.ts"
+    ]
   }
 }
