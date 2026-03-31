@@ -11,8 +11,8 @@
     "tsx": "^4.21.0"
   },
   "openclaw": {
-    "extensions": [
-      "./src/server.ts"
-    ]
+    "bundle": {
+      "stageRuntimeDependencies": true
+    }
   }
 }
