@@ -15,7 +15,6 @@ type DerivedAppsConfig = {
   _default: AppsDefaultConfig;
 } & Record<string, DerivedAppConfig>;
 
-export const CHATGPT_APPS_BASE_URL = "https://chatgpt.com";
 const DEFAULT_APP_SERVER_COMMAND = "codex";
 const DEFAULT_ALLOW_DESTRUCTIVE_ACTIONS = "never";
 
@@ -130,8 +129,4 @@ export function buildDerivedAppsConfig(config: ChatgptAppsConfig): DerivedAppsCo
 
 export function hashChatgptAppsConfig(config: ChatgptAppsConfig): string {
   return createHash("sha256").update(JSON.stringify(config)).digest("hex");
-}
-
-export function hashChatgptBaseUrl(): string {
-  return createHash("sha256").update(CHATGPT_APPS_BASE_URL).digest("hex");
 }

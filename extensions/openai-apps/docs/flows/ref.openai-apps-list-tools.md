@@ -100,7 +100,7 @@ Ordered call path:
      await writeRefreshDebug({ statePaths, debug: { status: "failure", message: auth.message } })
      return { status: "error", reason: "auth", ... }
    ```
-2. Reuse a persisted snapshot when its identity, base URL, and TTL still match.
+2. Reuse a persisted snapshot when its identity and TTL still match.
    ```ts
    // Source: extensions/openai-apps/src/refresh-snapshot.ts#L109-L143
    // Source: extensions/openai-apps/src/snapshot-cache.ts#L112-L133
@@ -108,7 +108,6 @@ Ordered call path:
    reuseInputs := {
      accountId: auth.accountId,
      authIdentityKey: buildAuthIdentityKey(auth.identity),
-     baseUrlHash: hashChatgptBaseUrl(),
    }
    if currentSnapshot && isSnapshotFresh({ snapshot: currentSnapshot, inputs: reuseInputs, now: now() })
      await writeRefreshDebug({ statePaths, debug: { status: "success", source: "cache", accountId: auth.accountId } })
@@ -155,7 +154,6 @@ Ordered call path:
      projectedAt: capture.projectedAt,
      accountId: auth.accountId,
      authIdentityKey: buildAuthIdentityKey(auth.identity),
-     baseUrlHash: hashChatgptBaseUrl(),
      connectors: deriveConnectorRecordsFromApps(capture.apps),
    }
    await writePersistedSnapshot({ statePaths, snapshot: nextSnapshot })
@@ -270,13 +268,13 @@ External boundaries:
 
 ### Runtime controls (or `None identified`)
 
-| Name                                                               | Kind    | Where Read                                                                                                   | Effect on Flow                                                                                 |
-| ------------------------------------------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
-| `plugins.entries["openai-apps"].config.enabled`                    | config  | `extensions/openai-apps/src/refresh-snapshot.ts#L61-L76`                                                     | Disables publication before auth, cache, or refresh work runs.                                 |
-| `plugins.entries["openai-apps"].config.connectors`                 | config  | `extensions/openai-apps/src/config.ts#L73-L85`, `extensions/openai-apps/src/mcp-bridge.ts#L50-L116`          | Controls wildcard enablement, explicit disables, and which connector records become MCP tools. |
-| `plugins.entries["openai-apps"].config.appServer.command/args`     | config  | `extensions/openai-apps/src/config.ts#L77-L84`, `extensions/openai-apps/src/app-server-session.ts#L132-L147` | Chooses which app-server binary/session is used for snapshot refresh.                          |
-| `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_AGENT_DIR` | env     | `extensions/openai-apps/src/runtime-env.ts#L152-L191`, `extensions/openai-apps/src/state-paths.ts#L14-L42`   | Changes where config, auth store, snapshot, and refresh-debug files are resolved.              |
-| `OPENCLAW_OPENAI_APPS_DEBUG=1`                                     | env     | `extensions/openai-apps/src/server.ts#L8-L13`                                                                | Emits bundle bootstrap debug logs to stderr.                                                   |
+| Name                                                               | Kind   | Where Read                                                                                                   | Effect on Flow                                                                                 |
+| ------------------------------------------------------------------ | ------ | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `plugins.entries["openai-apps"].config.enabled`                    | config | `extensions/openai-apps/src/refresh-snapshot.ts#L61-L76`                                                     | Disables publication before auth, cache, or refresh work runs.                                 |
+| `plugins.entries["openai-apps"].config.connectors`                 | config | `extensions/openai-apps/src/config.ts#L73-L85`, `extensions/openai-apps/src/mcp-bridge.ts#L50-L116`          | Controls wildcard enablement, explicit disables, and which connector records become MCP tools. |
+| `plugins.entries["openai-apps"].config.appServer.command/args`     | config | `extensions/openai-apps/src/config.ts#L77-L84`, `extensions/openai-apps/src/app-server-session.ts#L132-L147` | Chooses which app-server binary/session is used for snapshot refresh.                          |
+| `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_AGENT_DIR` | env    | `extensions/openai-apps/src/runtime-env.ts#L152-L191`, `extensions/openai-apps/src/state-paths.ts#L14-L42`   | Changes where config, auth store, snapshot, and refresh-debug files are resolved.              |
+| `OPENCLAW_OPENAI_APPS_DEBUG=1`                                     | env    | `extensions/openai-apps/src/server.ts#L8-L13`                                                                | Emits bundle bootstrap debug logs to stderr.                                                   |
 
 ### Notable gates
 

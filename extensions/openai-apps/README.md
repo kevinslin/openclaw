@@ -163,8 +163,6 @@ Example:
   "projectedAt": "2026-03-30T18:00:00.000Z",
   "accountId": "acct_123",
   "authIdentityKey": "user@example.com",
-  "configHash": "config-hash",
-  "baseUrlHash": "base-hash",
   "connectors": [
     {
       "connectorId": "gmail",

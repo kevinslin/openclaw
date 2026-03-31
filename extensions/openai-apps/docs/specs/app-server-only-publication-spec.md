@@ -51,7 +51,7 @@ That creates ambiguity during validation. A user can set `appInvokePath=appServe
 
 ### Required Pre-Read
 
-- `docs/flows/topic.openai-apps-app-server-invocation.md`
+- `docs/flows/ref.openai-apps-call-tool.md`
 - `docs/specs/2026-03-chatgpt-apps/app-invoke-path-spec.md`
 - `extensions/openai-apps/src/mcp-bridge.ts`
 - `extensions/openai-apps/src/app-server-session.ts`
@@ -156,7 +156,7 @@ Under the target model, the bundle should treat the local MCP tool call as a req
   Why: remove dual-mode expectations and rewrite tests around the single app-server path.
 - `extensions/openai-apps/README.md`
   Why: remove configuration/docs that mention `appInvokePath` or `remoteMCP`.
-- `docs/flows/topic.openai-apps-app-server-invocation.md`
+- `docs/flows/ref.openai-apps-call-tool.md`
   Why: align the documented flow with the simplified architecture.
 
 ### Resolved Ambiguities / Decisions

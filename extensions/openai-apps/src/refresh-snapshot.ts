@@ -3,7 +3,7 @@ import type { AppServerAppsConfigWriteGate } from "./app-server-apps-config.js";
 import { captureAppServerSnapshot, type AppServerRefreshCapture } from "./app-server-session.js";
 import type { ChatgptAppsResolvedAuth } from "./auth-projector.js";
 import { resolveChatgptAppsProjectedAuth } from "./auth-projector.js";
-import { hashChatgptAppsConfig, hashChatgptBaseUrl, resolveChatgptAppsConfig } from "./config.js";
+import { resolveChatgptAppsConfig } from "./config.js";
 import { deriveConnectorRecordsFromApps } from "./connector-record.js";
 import {
   buildAuthIdentityKey,
@@ -40,7 +40,6 @@ export async function ensureFreshSnapshot(params: {
   loadOpenClawConfig: () => OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
-  hardRefresh?: boolean;
   now?: () => number;
   resolveProjectedAuth?: (params: {
     config: OpenClawConfig;
@@ -113,13 +112,10 @@ export async function ensureFreshSnapshot(params: {
   const freshnessInputs = {
     accountId: auth.accountId,
     authIdentityKey: buildAuthIdentityKey(auth.identity),
-    configHash: hashChatgptAppsConfig(config),
-    baseUrlHash: hashChatgptBaseUrl(),
   };
 
   if (
     currentSnapshot &&
-    !params.hardRefresh &&
     isSnapshotFresh({
       snapshot: currentSnapshot,
       inputs: freshnessInputs,
@@ -189,8 +185,6 @@ export async function ensureFreshSnapshot(params: {
       projectedAt: capture.projectedAt,
       accountId: auth.accountId,
       authIdentityKey: buildAuthIdentityKey(auth.identity),
-      configHash: hashChatgptAppsConfig(config),
-      baseUrlHash: hashChatgptBaseUrl(),
       connectors: deriveConnectorRecordsFromApps(capture.apps),
     };
     await writePersistedSnapshot({

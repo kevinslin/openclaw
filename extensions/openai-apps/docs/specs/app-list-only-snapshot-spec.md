@@ -60,8 +60,8 @@ that model entirely and leaves `app/list` as the only external refresh source.
 ### Required Pre-Read
 
 - `docs/specs/2026-03-chatgpt-apps/app-server-only-publication-spec.md`
-- `docs/flows/topic.openai-apps-initialization-cache.md`
-- `docs/flows/topic.openai-apps-runtime-call.md`
+- `docs/flows/ref.openai-apps-list-tools.md`
+- `docs/flows/ref.openai-apps-call-tool.md`
 - `extensions/openai-apps/src/app-server-session.ts`
 - `extensions/openai-apps/src/snapshot-cache.ts`
 - `extensions/openai-apps/src/mcp-bridge.ts`
@@ -149,9 +149,9 @@ keeping one canonical structure.
 - `extensions/openai-apps/README.md`
   Why: update the documented cache snapshot example and remove status-based
   language.
-- `docs/flows/topic.openai-apps-initialization-cache.md`
+- `docs/flows/ref.openai-apps-list-tools.md`
   Why: refresh no longer reads `legacy app-status RPC`.
-- `docs/flows/topic.openai-apps-runtime-call.md`
+- `docs/flows/ref.openai-apps-call-tool.md`
   Why: runtime route reconstruction should point at snapshot connector metadata,
   not status-derived route state.
 
@@ -235,8 +235,6 @@ to preserve runtime behavior.
   "projectedAt": "...",
   "accountId": "...",
   "authIdentityKey": "...",
-  "configHash": "...",
-  "baseUrlHash": "...",
   "connectors": [
     {
       "connectorId": "gmail",

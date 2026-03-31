@@ -109,7 +109,7 @@ describe("ensureFreshSnapshot", () => {
     expect(captureSnapshot).toHaveBeenCalledTimes(1);
   });
 
-  it("invalidates the snapshot when config changes", async () => {
+  it("reuses the snapshot when config changes", async () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chatgpt-apps-"));
     const env = {
       OPENCLAW_STATE_DIR: tempRoot,
@@ -132,7 +132,7 @@ describe("ensureFreshSnapshot", () => {
       captureSnapshot,
     });
 
-    await ensureFreshSnapshot({
+    const second = await ensureFreshSnapshot({
       loadOpenClawConfig: () => createConfig({ slack: { enabled: false } }),
       env,
       now: () => new Date("2026-03-29T19:00:00.000Z").getTime(),
@@ -147,58 +147,9 @@ describe("ensureFreshSnapshot", () => {
       captureSnapshot,
     });
 
-    expect(captureSnapshot).toHaveBeenCalledTimes(2);
-  });
-
-  it("returns a hard refresh error while keeping the last good snapshot on disk", async () => {
-    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chatgpt-apps-"));
-    const env = {
-      OPENCLAW_STATE_DIR: tempRoot,
-      HOME: tempRoot,
-    };
-    const statePaths = resolveChatgptAppsStatePaths(env);
-
-    await ensureFreshSnapshot({
-      loadOpenClawConfig: () => createConfig(),
-      env,
-      now: () => new Date("2026-03-29T18:01:00.000Z").getTime(),
-      resolveProjectedAuth: async () => ({
-        status: "ok",
-        accessToken: "access-token",
-        accountId: "acct_123",
-        planType: null,
-        profileId: "openai-codex:default",
-        identity: { email: "user@example.com", profileName: "user@example.com" },
-      }),
-      captureSnapshot: async () => createCapture(),
-    });
-
-    const failed = await ensureFreshSnapshot({
-      loadOpenClawConfig: () => createConfig(),
-      env,
-      hardRefresh: true,
-      now: () => new Date("2026-03-29T18:30:00.000Z").getTime(),
-      resolveProjectedAuth: async () => ({
-        status: "ok",
-        accessToken: "access-token",
-        accountId: "acct_123",
-        planType: null,
-        profileId: "openai-codex:default",
-        identity: { email: "user@example.com", profileName: "user@example.com" },
-      }),
-      captureSnapshot: async () => {
-        throw new Error("sidecar launch failed");
-      },
-    });
-
-    expect(failed).toMatchObject({
-      status: "error",
-      reason: "refresh",
-      message: "sidecar launch failed",
-    });
-    const snapshot = await readPersistedSnapshot(statePaths.snapshotPath);
-    expect(snapshot?.accountId).toBe("acct_123");
-    expect(snapshot?.connectors.map((connector) => connector.connectorId)).toEqual(["slack"]);
+    expect(second.status).toBe("ok");
+    expect(second.status === "ok" ? second.source : "unexpected").toBe("cache");
+    expect(captureSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("times out hung refresh captures instead of blocking indefinitely", async () => {
@@ -247,8 +198,6 @@ describe("ensureFreshSnapshot", () => {
           projectedAt: "2026-03-29T18:00:00.000Z",
           accountId: "acct_123",
           authIdentityKey: "user@example.com",
-          configHash: "config-hash",
-          baseUrlHash: "base-hash",
         },
         null,
         2,

@@ -180,9 +180,7 @@ function formatJsonForPrompt(value: unknown): string {
   }
 }
 
-function resolveDisplayedElicitationPayload(
-  params: McpServerElicitationRequestParams,
-): unknown {
+function resolveDisplayedElicitationPayload(params: McpServerElicitationRequestParams): unknown {
   if (isRecord(params._meta) && isRecord(params._meta.tool_params)) {
     return params._meta.tool_params;
   }
@@ -235,7 +233,6 @@ export class ChatgptAppsMcpBridge {
   private readonly resolveProjectedAuth;
   private readonly appServerInvoker: AppServerToolInvoker;
   private readonly appsConfigWriteGate: AppServerAppsConfigWriteGate;
-  private hardRefreshRequested: boolean;
   private toolCache: BridgeToolCache | null = null;
   private toolCachePromise: Promise<BridgeToolCache> | null = null;
 
@@ -243,7 +240,6 @@ export class ChatgptAppsMcpBridge {
     loadOpenClawConfig: () => OpenClawConfig;
     env?: NodeJS.ProcessEnv;
     workspaceDir?: string;
-    hardRefresh?: boolean;
     ensureFreshSnapshot?: typeof ensureFreshSnapshot;
     resolveProjectedAuth?: typeof resolveChatgptAppsProjectedAuth;
     appServerInvoker?: AppServerToolInvoker;
@@ -251,7 +247,6 @@ export class ChatgptAppsMcpBridge {
     this.loadOpenClawConfig = params.loadOpenClawConfig;
     this.env = params.env ?? process.env;
     this.workspaceDir = params.workspaceDir;
-    this.hardRefreshRequested = params.hardRefresh ?? false;
     this.ensureFreshSnapshot = params.ensureFreshSnapshot ?? ensureFreshSnapshot;
     this.resolveProjectedAuth = params.resolveProjectedAuth ?? resolveChatgptAppsProjectedAuth;
     this.appServerInvoker = params.appServerInvoker ?? invokeViaAppServer;
@@ -329,18 +324,11 @@ export class ChatgptAppsMcpBridge {
     });
   }
 
-  private consumeHardRefresh(): boolean {
-    const hardRefresh = this.hardRefreshRequested;
-    this.hardRefreshRequested = false;
-    return hardRefresh;
-  }
-
   private async getPublicationState(): Promise<PublicationState> {
     const refreshResult = await this.ensureFreshSnapshot({
       loadOpenClawConfig: this.loadOpenClawConfig,
       env: this.env,
       workspaceDir: this.workspaceDir,
-      hardRefresh: this.consumeHardRefresh(),
       appsConfigWriteGate: this.appsConfigWriteGate,
     });
     if (refreshResult.status !== "ok") {
@@ -426,9 +414,7 @@ export class ChatgptAppsMcpBridge {
     };
   }
 
-  private async handleMcpServerElicitation(
-    elicitation: McpServerElicitationRequestParams,
-  ) {
+  private async handleMcpServerElicitation(elicitation: McpServerElicitationRequestParams) {
     const result = await this.server.elicitInput(buildDestructiveActionApprovalPrompt(elicitation));
     if (result.action !== "accept") {
       return {
@@ -450,7 +436,6 @@ export async function runChatgptAppsMcpBridgeStdio(params: {
   loadOpenClawConfig: () => OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
-  hardRefresh?: boolean;
 }): Promise<void> {
   const bridge = new ChatgptAppsMcpBridge(params);
   await bridge.connect(new StdioServerTransport());

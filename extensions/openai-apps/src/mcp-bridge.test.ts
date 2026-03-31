@@ -52,8 +52,6 @@ function createPersistedSnapshot(): PersistedConnectorSnapshot {
     projectedAt: "2026-03-29T18:00:00.000Z",
     accountId: "acct_123",
     authIdentityKey: "user@example.com",
-    configHash: "config-hash",
-    baseUrlHash: "base-hash",
     connectors: [createConnectorRecord()],
   };
 }
@@ -523,7 +521,9 @@ describe("ChatgptAppsMcpBridge", () => {
       expect(prompt.message).toContain("App payload:");
       expect(prompt.message).toContain('"channel": "#launch"');
       expect(prompt.message).toContain('"text": "Ship it"');
-      expect(prompt.message).toContain("Choose accept to continue or decline to reject the action.");
+      expect(prompt.message).toContain(
+        "Choose accept to continue or decline to reject the action.",
+      );
     } finally {
       await Promise.all([client.close(), bridge.close()]);
     }

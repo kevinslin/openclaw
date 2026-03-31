@@ -17,8 +17,6 @@ export type PersistedConnectorSnapshot = {
   projectedAt: string;
   accountId: string;
   authIdentityKey: string;
-  configHash: string;
-  baseUrlHash: string;
   connectors: PersistedConnectorRecord[];
 };
 
@@ -33,8 +31,6 @@ export type RefreshDebugState = {
 export type SnapshotInputs = {
   accountId: string;
   authIdentityKey: string;
-  configHash: string;
-  baseUrlHash: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -59,8 +55,6 @@ export function computeSnapshotKey(snapshot: PersistedConnectorSnapshot): string
       JSON.stringify({
         fetchedAt: snapshot.fetchedAt,
         accountId: snapshot.accountId,
-        configHash: snapshot.configHash,
-        baseUrlHash: snapshot.baseUrlHash,
         connectors: snapshot.connectors.map((connector) => ({
           connectorId: connector.connectorId,
           appId: connector.appId,
@@ -91,8 +85,6 @@ export async function readPersistedSnapshot(
       typeof raw.projectedAt !== "string" ||
       typeof raw.accountId !== "string" ||
       typeof raw.authIdentityKey !== "string" ||
-      typeof raw.configHash !== "string" ||
-      typeof raw.baseUrlHash !== "string" ||
       !Array.isArray(raw.connectors)
     ) {
       return null;
@@ -126,9 +118,7 @@ export function isSnapshotFresh(params: {
   }
   return (
     params.snapshot.accountId === params.inputs.accountId &&
-    params.snapshot.authIdentityKey === params.inputs.authIdentityKey &&
-    params.snapshot.configHash === params.inputs.configHash &&
-    params.snapshot.baseUrlHash === params.inputs.baseUrlHash
+    params.snapshot.authIdentityKey === params.inputs.authIdentityKey
   );
 }
 
