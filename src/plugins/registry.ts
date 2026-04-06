@@ -15,7 +15,7 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
-import { resolveUserPath } from "../utils.js";
+import { isRecord, resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
 import { registerPluginCommand, validatePluginCommandDefinition } from "./command-registration.js";
 import type { PluginActivationSource } from "./config-state.js";
@@ -55,6 +55,8 @@ import type {
   OpenClawPluginCliRegistrar,
   OpenClawPluginCommandDefinition,
   PluginConversationBindingResolvedEvent,
+  OpenClawPluginMcpServerConfig,
+  OpenClawPluginMcpServerRegistration,
   OpenClawPluginHttpRouteAuth,
   OpenClawPluginHttpRouteMatch,
   OpenClawPluginHttpRouteHandler,
@@ -95,6 +97,8 @@ export type PluginToolRegistration = {
   source: string;
   rootDir?: string;
 };
+
+export type PluginMcpServerRegistration = OpenClawPluginMcpServerRegistration;
 
 export type PluginCliRegistration = {
   pluginId: string;
@@ -279,6 +283,7 @@ export type PluginRecord = {
 export type PluginRegistry = {
   plugins: PluginRecord[];
   tools: PluginToolRegistration[];
+  mcpServers: PluginMcpServerRegistration[];
   hooks: PluginHookRegistration[];
   typedHooks: TypedPluginHookRegistration[];
   channels: PluginChannelRegistration[];
@@ -368,6 +373,50 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       factory,
       names: normalized,
       optional,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerMcpServer = (
+    record: PluginRecord,
+    rawName: string,
+    server: OpenClawPluginMcpServerConfig,
+  ) => {
+    const name = rawName.trim();
+    if (!name) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: "MCP server registration missing name",
+      });
+      return;
+    }
+    if (!isRecord(server)) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: `MCP server "${name}" registration must be an object`,
+      });
+      return;
+    }
+    const existing = registry.mcpServers.find((entry) => entry.name === name);
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `MCP server already registered: ${name} (${existing.pluginId})`,
+      });
+      return;
+    }
+    registry.mcpServers.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      name,
+      server: { ...server },
       source: record.source,
       rootDir: record.rootDir,
     });
@@ -1184,6 +1233,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         ...(registrationMode === "full"
           ? {
               registerTool: (tool, opts) => registerTool(record, tool, opts),
+              registerMcpServer: (name, server) => registerMcpServer(record, name, server),
               registerHook: (events, handler, opts) =>
                 registerHook(record, events, handler, opts, params.config),
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
@@ -1401,6 +1451,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     createApi,
     pushDiagnostic,
     registerTool,
+    registerMcpServer,
     registerChannel,
     registerProvider,
     registerSpeechProvider,

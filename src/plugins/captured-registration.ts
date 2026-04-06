@@ -10,6 +10,7 @@ import type {
   OpenClawPluginApi,
   OpenClawPluginCliCommandDescriptor,
   OpenClawPluginCliRegistrar,
+  OpenClawPluginMcpServerRegistration,
   ProviderPlugin,
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
@@ -39,6 +40,7 @@ export type CapturedPluginRegistration = {
   webFetchProviders: WebFetchProviderPlugin[];
   webSearchProviders: WebSearchProviderPlugin[];
   memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[];
+  mcpServers: Array<Pick<OpenClawPluginMcpServerRegistration, "name" | "server">>;
   tools: AnyAgentTool[];
 };
 
@@ -58,6 +60,7 @@ export function createCapturedPluginRegistration(params?: {
   const webFetchProviders: WebFetchProviderPlugin[] = [];
   const webSearchProviders: WebSearchProviderPlugin[] = [];
   const memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[] = [];
+  const mcpServers: Array<Pick<OpenClawPluginMcpServerRegistration, "name" | "server">> = [];
   const tools: AnyAgentTool[] = [];
   const noopLogger = {
     info() {},
@@ -79,6 +82,7 @@ export function createCapturedPluginRegistration(params?: {
     webFetchProviders,
     webSearchProviders,
     memoryEmbeddingProviders,
+    mcpServers,
     tools,
     api: buildPluginApi({
       id: "captured-plugin-registration",
@@ -150,6 +154,9 @@ export function createCapturedPluginRegistration(params?: {
           if (typeof tool !== "function") {
             tools.push(tool);
           }
+        },
+        registerMcpServer(name, server) {
+          mcpServers.push({ name, server });
         },
       },
     }),
