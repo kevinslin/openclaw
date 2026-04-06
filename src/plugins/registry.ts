@@ -277,6 +277,7 @@ export type PluginRecord = {
   musicGenerationProviderIds: string[];
   webFetchProviderIds: string[];
   webSearchProviderIds: string[];
+  mcpServerNames?: string[];
   memoryEmbeddingProviderIds: string[];
   gatewayMethods: string[];
   cliCommands: string[];
@@ -437,6 +438,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         message: `MCP server already registered: ${name} (${existing.pluginId})`,
       });
       return;
+    }
+    if (!record.mcpServerNames?.includes(name)) {
+      record.mcpServerNames = [...(record.mcpServerNames ?? []), name];
     }
     registry.mcpServers.push({
       pluginId: record.id,

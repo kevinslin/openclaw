@@ -649,6 +649,9 @@ function createPluginRecord(params: {
   configSchema: boolean;
   contracts?: PluginManifestContracts;
 }): PluginRecord {
+  const mcpServerNames = Array.from(
+    new Set((params.contracts?.mcpServers ?? []).map((name) => name.trim()).filter(Boolean)),
+  );
   return {
     id: params.id,
     name: params.name ?? params.id,
@@ -681,6 +684,7 @@ function createPluginRecord(params: {
     musicGenerationProviderIds: [],
     webFetchProviderIds: [],
     webSearchProviderIds: [],
+    mcpServerNames,
     memoryEmbeddingProviderIds: [],
     gatewayMethods: [],
     cliCommands: [],

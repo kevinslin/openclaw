@@ -46,6 +46,7 @@ describe("bundled capability metadata", () => {
         webSearchProviderIds: uniqueStrings(manifest.contracts?.webSearchProviders, (value) =>
           value.trim(),
         ),
+        mcpServerNames: uniqueStrings(manifest.contracts?.mcpServers, (value) => value.trim()),
         toolNames: uniqueStrings(manifest.contracts?.tools, (value) => value.trim()),
       }))
       .filter(
@@ -60,6 +61,7 @@ describe("bundled capability metadata", () => {
           entry.musicGenerationProviderIds.length > 0 ||
           entry.webFetchProviderIds.length > 0 ||
           entry.webSearchProviderIds.length > 0 ||
+          entry.mcpServerNames.length > 0 ||
           entry.toolNames.length > 0,
       )
       .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
