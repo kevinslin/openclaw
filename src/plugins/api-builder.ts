@@ -19,6 +19,7 @@ export type BuildPluginApiParams = {
     Pick<
       OpenClawPluginApi,
       | "registerTool"
+      | "registerMcpServer"
       | "registerHook"
       | "registerHttpRoute"
       | "registerChannel"
@@ -57,6 +58,7 @@ export type BuildPluginApiParams = {
 };
 
 const noopRegisterTool: OpenClawPluginApi["registerTool"] = () => {};
+const noopRegisterMcpServer: OpenClawPluginApi["registerMcpServer"] = () => {};
 const noopRegisterHook: OpenClawPluginApi["registerHook"] = () => {};
 const noopRegisterHttpRoute: OpenClawPluginApi["registerHttpRoute"] = () => {};
 const noopRegisterChannel: OpenClawPluginApi["registerChannel"] = () => {};
@@ -117,6 +119,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     runtime: params.runtime,
     logger: params.logger,
     registerTool: handlers.registerTool ?? noopRegisterTool,
+    registerMcpServer: handlers.registerMcpServer ?? noopRegisterMcpServer,
     registerHook: handlers.registerHook ?? noopRegisterHook,
     registerHttpRoute: handlers.registerHttpRoute ?? noopRegisterHttpRoute,
     registerChannel: handlers.registerChannel ?? noopRegisterChannel,
