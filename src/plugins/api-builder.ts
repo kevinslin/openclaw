@@ -19,6 +19,7 @@ export type BuildPluginApiParams = {
     Pick<
       OpenClawPluginApi,
       | "registerTool"
+      | "registerMcpServer"
       | "registerHook"
       | "registerHttpRoute"
       | "registerChannel"
@@ -45,6 +46,7 @@ export type BuildPluginApiParams = {
       | "onConversationBindingResolved"
       | "registerCommand"
       | "registerContextEngine"
+      | "registerMemoryCapability"
       | "registerMemoryPromptSection"
       | "registerMemoryPromptSupplement"
       | "registerMemoryCorpusSupplement"
@@ -57,6 +59,7 @@ export type BuildPluginApiParams = {
 };
 
 const noopRegisterTool: OpenClawPluginApi["registerTool"] = () => {};
+const noopRegisterMcpServer: OpenClawPluginApi["registerMcpServer"] = () => {};
 const noopRegisterHook: OpenClawPluginApi["registerHook"] = () => {};
 const noopRegisterHttpRoute: OpenClawPluginApi["registerHttpRoute"] = () => {};
 const noopRegisterChannel: OpenClawPluginApi["registerChannel"] = () => {};
@@ -91,6 +94,7 @@ const noopOnConversationBindingResolved: OpenClawPluginApi["onConversationBindin
   () => {};
 const noopRegisterCommand: OpenClawPluginApi["registerCommand"] = () => {};
 const noopRegisterContextEngine: OpenClawPluginApi["registerContextEngine"] = () => {};
+const noopRegisterMemoryCapability: OpenClawPluginApi["registerMemoryCapability"] = () => {};
 const noopRegisterMemoryPromptSection: OpenClawPluginApi["registerMemoryPromptSection"] = () => {};
 const noopRegisterMemoryPromptSupplement: OpenClawPluginApi["registerMemoryPromptSupplement"] =
   () => {};
@@ -117,6 +121,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     runtime: params.runtime,
     logger: params.logger,
     registerTool: handlers.registerTool ?? noopRegisterTool,
+    registerMcpServer: handlers.registerMcpServer ?? noopRegisterMcpServer,
     registerHook: handlers.registerHook ?? noopRegisterHook,
     registerHttpRoute: handlers.registerHttpRoute ?? noopRegisterHttpRoute,
     registerChannel: handlers.registerChannel ?? noopRegisterChannel,
@@ -152,6 +157,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
       handlers.onConversationBindingResolved ?? noopOnConversationBindingResolved,
     registerCommand: handlers.registerCommand ?? noopRegisterCommand,
     registerContextEngine: handlers.registerContextEngine ?? noopRegisterContextEngine,
+    registerMemoryCapability: handlers.registerMemoryCapability ?? noopRegisterMemoryCapability,
     registerMemoryPromptSection:
       handlers.registerMemoryPromptSection ?? noopRegisterMemoryPromptSection,
     registerMemoryPromptSupplement:

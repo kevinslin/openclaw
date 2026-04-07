@@ -1,4 +1,7 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   createCompatibilityNotice,
   createCustomHook,
@@ -62,6 +65,7 @@ vi.mock("../plugin-sdk/facade-runtime.js", () => ({
 }));
 
 vi.mock("./runtime.js", () => ({
+  getActivePluginChannelRegistry: () => null,
   listImportedRuntimePluginIds: (...args: unknown[]) => listImportedRuntimePluginIdsMock(...args),
 }));
 
@@ -264,7 +268,8 @@ function expectBundleInspectState(
 }
 
 describe("plugin status reports", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({
       buildAllPluginInspectReports,
       buildPluginCompatibilityNotices,
@@ -275,9 +280,6 @@ describe("plugin status reports", () => {
       formatPluginCompatibilityNotice,
       summarizePluginCompatibility,
     } = await import("./status.js"));
-  });
-
-  beforeEach(() => {
     loadConfigMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
     loadPluginMetadataRegistrySnapshotMock.mockReset();
@@ -787,6 +789,128 @@ describe("plugin status reports", () => {
     expectBundleInspectState(inspect, {
       bundleCapabilities: expectedBundleCapabilities,
       shape: expectedShape,
+    });
+  });
+
+  it("treats manifest-declared native MCP servers as unsupported in metadata-only inspect", () => {
+    setSinglePluginLoadResult(
+      createPluginRecord({
+        id: "native-mcp",
+        name: "Native MCP",
+        mcpServerNames: ["helloWorld"],
+      }),
+    );
+
+    const inspect = expectInspectReport("native-mcp");
+
+    expectInspectShape(inspect, {
+      shape: "plain-capability",
+      capabilityMode: "plain",
+      capabilityKinds: ["mcp-server"],
+    });
+    expect(inspect.mcpServers).toEqual([{ name: "helloWorld", hasStdioTransport: false }]);
+  });
+
+  it("keeps manifest-declared native MCP servers unsupported when runtime registration fails", () => {
+    setSinglePluginLoadResult(
+      createPluginRecord({
+        id: "native-mcp",
+        name: "Native MCP",
+        mcpServerNames: ["helloWorld"],
+      }),
+      {
+        diagnostics: [
+          {
+            level: "error",
+            pluginId: "native-mcp",
+            source: "/tmp/native-mcp/index.ts",
+            message: 'MCP server "helloWorld" must use managed stdio transport, not URL transport',
+          },
+        ],
+      },
+    );
+
+    const inspect = expectInspectReport("native-mcp");
+
+    expect(inspect.mcpServers).toEqual([{ name: "helloWorld", hasStdioTransport: false }]);
+    expect(inspect.diagnostics).toEqual([
+      expect.objectContaining({
+        level: "error",
+        pluginId: "native-mcp",
+        message: 'MCP server "helloWorld" must use managed stdio transport, not URL transport',
+      }),
+    ]);
+  });
+
+  it("trims and skips empty runtime MCP server names in inspect output", () => {
+    setSinglePluginLoadResult(
+      createPluginRecord({
+        id: "native-mcp",
+        name: "Native MCP",
+      }),
+      {
+        mcpServers: [
+          {
+            pluginId: "native-mcp",
+            pluginName: "Native MCP",
+            name: "  helloWorld  ",
+            server: { command: "node", args: ["hello-world.mjs"] },
+            source: "/tmp/native-mcp/index.ts",
+          },
+          {
+            pluginId: "native-mcp",
+            pluginName: "Native MCP",
+            name: "   ",
+            server: { command: "node", args: ["blank.mjs"] },
+            source: "/tmp/native-mcp/index.ts",
+          },
+        ],
+      },
+    );
+
+    const inspect = expectInspectReport("native-mcp");
+
+    expect(inspect.mcpServers).toEqual([{ name: "helloWorld", hasStdioTransport: true }]);
+    expectInspectShape(inspect, {
+      shape: "plain-capability",
+      capabilityMode: "plain",
+      capabilityKinds: ["mcp-server"],
+    });
+  });
+
+  it("dedupes bundle MCP inspect names against native ownership and preserves native status", async () => {
+    await withTempDir("openclaw-status-bundle-mcp-", async (rootDir) => {
+      await fs.mkdir(path.join(rootDir, ".claude-plugin"), { recursive: true });
+      await fs.writeFile(path.join(rootDir, ".claude-plugin", "plugin.json"), "{}", "utf8");
+      await fs.writeFile(
+        path.join(rootDir, ".mcp.json"),
+        JSON.stringify({
+          mcpServers: {
+            helloWorld: { command: "node", args: ["hello.mjs"] },
+            bundleOnly: { command: "node", args: ["bundle-only.mjs"] },
+            unsupportedOnly: { url: "https://example.com/mcp" },
+          },
+        }),
+        "utf8",
+      );
+      setSinglePluginLoadResult(
+        createPluginRecord({
+          id: "bundle-mcp",
+          name: "Bundle MCP",
+          format: "bundle",
+          bundleFormat: "claude",
+          rootDir,
+          mcpServerNames: ["helloWorld"],
+        }),
+      );
+
+      const inspect = expectInspectReport("bundle-mcp");
+
+      expect(inspect.mcpServers).toEqual([
+        { name: "bundleOnly", hasStdioTransport: true },
+        { name: "helloWorld", hasStdioTransport: true },
+        { name: "unsupportedOnly", hasStdioTransport: false },
+      ]);
     });
   });
 

@@ -1,0 +1,220 @@
+import fs from "node:fs";
+import path from "node:path";
+import type { OpenClawConfig } from "../config/config.js";
+import { isRecord, resolveUserPath } from "../utils.js";
+import type { BundleMcpConfig } from "./bundle-mcp.js";
+import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
+import type { PluginRegistry } from "./registry.js";
+import { getActivePluginRegistry, getActivePluginRegistryWorkspaceDir } from "./runtime.js";
+import type { OpenClawPluginMcpServerConfig } from "./types.js";
+
+export type PluginMcpServerConfigResult = {
+  config: BundleMcpConfig;
+};
+
+type PluginMcpServerConfigNormalizationResult =
+  | { ok: true; server: OpenClawPluginMcpServerConfig }
+  | { ok: false; error: string };
+
+function normalizeWorkspacePathForMatch(workspaceDir: string): string {
+  let normalized = path.resolve(workspaceDir);
+  try {
+    normalized = fs.realpathSync.native(normalized);
+  } catch {
+    // Missing workspaces can still be compared by their resolved spelling.
+  }
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function isPathSameOrInside(basePath: string, candidatePath: string): boolean {
+  const relative = path.relative(basePath, candidatePath);
+  return (
+    relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+  );
+}
+
+function isConfigOriginPluginStillLoadable(params: {
+  plugin: PluginRegistry["plugins"][number];
+  loadPaths: string[];
+}): boolean {
+  if (params.plugin.origin !== "config") {
+    return true;
+  }
+  if (params.loadPaths.length === 0) {
+    return false;
+  }
+
+  const pluginPaths = [params.plugin.rootDir, params.plugin.source]
+    .filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+    .map((entry) => normalizeWorkspacePathForMatch(entry));
+
+  return params.loadPaths.some((rawLoadPath) => {
+    const loadPath = normalizeWorkspacePathForMatch(resolveUserPath(rawLoadPath));
+    return pluginPaths.some(
+      (pluginPath) => loadPath === pluginPath || isPathSameOrInside(loadPath, pluginPath),
+    );
+  });
+}
+
+function isPluginEnabledByConfig(
+  plugin: PluginRegistry["plugins"][number],
+  cfg?: OpenClawConfig,
+): boolean {
+  if (!cfg) {
+    return true;
+  }
+
+  const normalizedPlugins = normalizePluginsConfig(cfg.plugins);
+  if (!normalizedPlugins.enabled) {
+    return false;
+  }
+
+  if (
+    !isConfigOriginPluginStillLoadable({
+      plugin,
+      loadPaths: normalizedPlugins.loadPaths,
+    })
+  ) {
+    return false;
+  }
+
+  if (normalizedPlugins.deny.includes(plugin.id)) {
+    return false;
+  }
+
+  const entry = normalizedPlugins.entries[plugin.id];
+  if (entry?.enabled === false) {
+    return false;
+  }
+
+  return resolveEffectivePluginActivationState({
+    id: plugin.id,
+    origin: plugin.origin,
+    config: normalizedPlugins,
+    rootConfig: cfg,
+    enabledByDefault: plugin.enabledByDefault,
+  }).activated;
+}
+
+function isWorkspaceMatch(params: { workspaceDir?: string; activeWorkspaceDir?: string }): boolean {
+  if (!params.workspaceDir) {
+    return true;
+  }
+  if (!params.activeWorkspaceDir) {
+    return false;
+  }
+  return (
+    normalizeWorkspacePathForMatch(params.workspaceDir) ===
+    normalizeWorkspacePathForMatch(params.activeWorkspaceDir)
+  );
+}
+
+function withDefaultCwd(
+  server: OpenClawPluginMcpServerConfig,
+  rootDir?: string,
+): OpenClawPluginMcpServerConfig {
+  if (rootDir && typeof server.cwd !== "string" && typeof server.workingDirectory !== "string") {
+    return { ...server, cwd: rootDir };
+  }
+  return { ...server };
+}
+
+export function normalizePluginRegisteredMcpServerConfig(params: {
+  name: string;
+  server: unknown;
+  rootDir?: string;
+}): PluginMcpServerConfigNormalizationResult {
+  if (!isRecord(params.server)) {
+    return {
+      ok: false,
+      error: `MCP server "${params.name}" registration must be an object`,
+    };
+  }
+
+  if (typeof params.server.url === "string" && params.server.url.trim().length > 0) {
+    return {
+      ok: false,
+      error: `MCP server "${params.name}" must use managed stdio transport, not URL transport`,
+    };
+  }
+
+  if (
+    typeof params.server.transport === "string" &&
+    params.server.transport.trim().length > 0 &&
+    params.server.transport !== "stdio"
+  ) {
+    return {
+      ok: false,
+      error: `MCP server "${params.name}" must use stdio transport (received ${params.server.transport})`,
+    };
+  }
+
+  if (typeof params.server.command !== "string" || params.server.command.trim().length === 0) {
+    return {
+      ok: false,
+      error: `MCP server "${params.name}" must use stdio transport with a non-empty command`,
+    };
+  }
+
+  const normalized = withDefaultCwd(
+    {
+      ...(params.server as OpenClawPluginMcpServerConfig),
+      command: params.server.command.trim(),
+    },
+    params.rootDir,
+  );
+
+  return {
+    ok: true,
+    server: normalized,
+  };
+}
+
+export function loadEnabledPluginMcpServerConfig(params?: {
+  workspaceDir?: string;
+  cfg?: OpenClawConfig;
+  registry?: PluginRegistry | null;
+}): PluginMcpServerConfigResult {
+  const explicitRegistryProvided = params !== undefined && Object.hasOwn(params, "registry");
+  const usingActiveRegistry = !explicitRegistryProvided;
+  const registry = explicitRegistryProvided ? params.registry : getActivePluginRegistry();
+  if (!registry) {
+    return { config: { mcpServers: {} } };
+  }
+  if (
+    usingActiveRegistry &&
+    !isWorkspaceMatch({
+      workspaceDir: params?.workspaceDir,
+      activeWorkspaceDir: getActivePluginRegistryWorkspaceDir(),
+    })
+  ) {
+    return { config: { mcpServers: {} } };
+  }
+  const loadedPluginIds = new Set(
+    registry.plugins
+      .filter(
+        (plugin) =>
+          plugin.enabled &&
+          plugin.status === "loaded" &&
+          isPluginEnabledByConfig(plugin, params?.cfg),
+      )
+      .map((plugin) => plugin.id),
+  );
+  const sortedEntries = [...registry.mcpServers]
+    .filter((entry) => loadedPluginIds.has(entry.pluginId))
+    .toSorted((left, right) => {
+      const nameOrder = left.name.localeCompare(right.name);
+      if (nameOrder !== 0) {
+        return nameOrder;
+      }
+      return left.pluginId.localeCompare(right.pluginId);
+    });
+  const mcpServers: Record<string, Record<string, unknown>> = {};
+  for (const entry of sortedEntries) {
+    if (entry.name in mcpServers) {
+      continue;
+    }
+    mcpServers[entry.name] = withDefaultCwd(entry.server, entry.rootDir);
+  }
+  return { config: { mcpServers } };
+}

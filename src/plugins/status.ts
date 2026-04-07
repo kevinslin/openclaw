@@ -34,6 +34,7 @@ export type PluginCapabilityKind =
   | "media-understanding"
   | "image-generation"
   | "web-search"
+  | "mcp-server"
   | "channel";
 
 export type PluginInspectShape =
@@ -235,7 +236,10 @@ export function buildPluginDiagnosticsReport(params?: PluginReportParams): Plugi
   return buildPluginReport(params, true);
 }
 
-function buildCapabilityEntries(plugin: PluginRegistry["plugins"][number]) {
+function buildCapabilityEntries(
+  plugin: PluginRegistry["plugins"][number],
+  mcpServerNames: string[],
+) {
   return [
     { kind: "cli-backend" as const, ids: plugin.cliBackendIds ?? [] },
     { kind: "text-inference" as const, ids: plugin.providerIds },
@@ -245,8 +249,73 @@ function buildCapabilityEntries(plugin: PluginRegistry["plugins"][number]) {
     { kind: "media-understanding" as const, ids: plugin.mediaUnderstandingProviderIds },
     { kind: "image-generation" as const, ids: plugin.imageGenerationProviderIds },
     { kind: "web-search" as const, ids: plugin.webSearchProviderIds },
+    { kind: "mcp-server" as const, ids: mcpServerNames },
     { kind: "channel" as const, ids: plugin.channelIds },
   ].filter((entry) => entry.ids.length > 0);
+}
+
+function buildNativeMcpInspectEntries(
+  plugin: PluginRegistry["plugins"][number],
+  report: PluginStatusReport,
+): PluginInspectReport["mcpServers"] {
+  const entries = new Map<string, PluginInspectReport["mcpServers"][number]>();
+
+  for (const name of plugin.mcpServerNames ?? []) {
+    const normalized = name.trim();
+    if (!normalized) {
+      continue;
+    }
+    entries.set(normalized, {
+      name: normalized,
+      hasStdioTransport: false,
+    });
+  }
+
+  for (const entry of report.mcpServers.filter((entry) => entry.pluginId === plugin.id)) {
+    const normalized = entry.name.trim();
+    if (!normalized) {
+      continue;
+    }
+    entries.set(normalized, {
+      name: normalized,
+      hasStdioTransport:
+        typeof entry.server.command === "string" && entry.server.command.trim().length > 0,
+    });
+  }
+
+  return [...entries.values()].toSorted((a, b) => a.name.localeCompare(b.name));
+}
+
+function mergeBundleMcpInspectEntries(params: {
+  existing: PluginInspectReport["mcpServers"];
+  supportedServerNames: string[];
+  unsupportedServerNames: string[];
+}): PluginInspectReport["mcpServers"] {
+  const entries = new Map(params.existing.map((entry) => [entry.name, entry]));
+
+  for (const name of params.supportedServerNames) {
+    const normalized = name.trim();
+    if (!normalized) {
+      continue;
+    }
+    entries.set(normalized, {
+      name: normalized,
+      hasStdioTransport: true,
+    });
+  }
+
+  for (const name of params.unsupportedServerNames) {
+    const normalized = name.trim();
+    if (!normalized || entries.has(normalized)) {
+      continue;
+    }
+    entries.set(normalized, {
+      name: normalized,
+      hasStdioTransport: false,
+    });
+  }
+
+  return [...entries.values()].toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
 function deriveInspectShape(params: {
@@ -305,7 +374,7 @@ export function buildPluginInspectReport(params: {
     return null;
   }
 
-  const capabilities = buildCapabilityEntries(plugin);
+  const nativeMcpServers = buildNativeMcpInspectEntries(plugin, report);
   const typedHooks = report.typedHooks
     .filter((entry) => entry.pluginId === plugin.id)
     .map((entry) => ({
@@ -326,6 +395,25 @@ export function buildPluginInspectReport(params: {
       names: [...entry.names],
       optional: entry.optional,
     }));
+
+  // Populate MCP server info for bundle-format plugins with a known rootDir.
+  let mcpServers: PluginInspectReport["mcpServers"] = nativeMcpServers;
+  if (plugin.format === "bundle" && plugin.bundleFormat && plugin.rootDir) {
+    const mcpSupport = inspectBundleMcpRuntimeSupport({
+      pluginId: plugin.id,
+      rootDir: plugin.rootDir,
+      bundleFormat: plugin.bundleFormat,
+    });
+    mcpServers = mergeBundleMcpInspectEntries({
+      existing: nativeMcpServers,
+      supportedServerNames: mcpSupport.supportedServerNames,
+      unsupportedServerNames: mcpSupport.unsupportedServerNames,
+    });
+  }
+  const capabilities = buildCapabilityEntries(
+    plugin,
+    mcpServers.map((entry) => entry.name),
+  );
   const diagnostics = report.diagnostics.filter((entry) => entry.pluginId === plugin.id);
   const policyEntry = normalizePluginsConfig(config.plugins).entries[plugin.id];
   const capabilityCount = capabilities.length;
@@ -340,26 +428,6 @@ export function buildPluginInspectReport(params: {
     gatewayMethodCount: plugin.gatewayMethods.length,
     httpRouteCount: plugin.httpRoutes,
   });
-
-  // Populate MCP server info for bundle-format plugins with a known rootDir.
-  let mcpServers: PluginInspectReport["mcpServers"] = [];
-  if (plugin.format === "bundle" && plugin.bundleFormat && plugin.rootDir) {
-    const mcpSupport = inspectBundleMcpRuntimeSupport({
-      pluginId: plugin.id,
-      rootDir: plugin.rootDir,
-      bundleFormat: plugin.bundleFormat,
-    });
-    mcpServers = [
-      ...mcpSupport.supportedServerNames.map((name) => ({
-        name,
-        hasStdioTransport: true,
-      })),
-      ...mcpSupport.unsupportedServerNames.map((name) => ({
-        name,
-        hasStdioTransport: false,
-      })),
-    ];
-  }
 
   // Populate LSP server info for bundle-format plugins with a known rootDir.
   let lspServers: PluginInspectReport["lspServers"] = [];

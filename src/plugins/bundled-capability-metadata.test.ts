@@ -12,6 +12,7 @@ describe("bundled capability metadata", () => {
     const expected = listBundledPluginMetadata()
       .map(({ manifest }) => ({
         pluginId: manifest.id,
+        cliBackendIds: uniqueStrings(manifest.cliBackends, (value) => value.trim()),
         providerIds: uniqueStrings(manifest.providers, (value) => value.trim()),
         speechProviderIds: uniqueStrings(manifest.contracts?.speechProviders, (value) =>
           value.trim(),
@@ -46,10 +47,12 @@ describe("bundled capability metadata", () => {
         webSearchProviderIds: uniqueStrings(manifest.contracts?.webSearchProviders, (value) =>
           value.trim(),
         ),
+        mcpServerNames: uniqueStrings(manifest.contracts?.mcpServers, (value) => value.trim()),
         toolNames: uniqueStrings(manifest.contracts?.tools, (value) => value.trim()),
       }))
       .filter(
         (entry) =>
+          entry.cliBackendIds.length > 0 ||
           entry.providerIds.length > 0 ||
           entry.speechProviderIds.length > 0 ||
           entry.realtimeTranscriptionProviderIds.length > 0 ||
@@ -60,6 +63,7 @@ describe("bundled capability metadata", () => {
           entry.musicGenerationProviderIds.length > 0 ||
           entry.webFetchProviderIds.length > 0 ||
           entry.webSearchProviderIds.length > 0 ||
+          entry.mcpServerNames.length > 0 ||
           entry.toolNames.length > 0,
       )
       .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));

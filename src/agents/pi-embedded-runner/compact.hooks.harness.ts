@@ -14,6 +14,11 @@ type MockMemorySearchManager = {
 type MockEmbeddedAgentStreamFn = Mock<
   (model?: unknown, context?: unknown, options?: unknown) => unknown
 >;
+type MockSandboxContext = {
+  enabled: boolean;
+  workspaceAccess: "none" | "ro" | "rw";
+  workspaceDir: string;
+} | null;
 
 export const contextEngineCompactMock = vi.fn(async () => ({
   ok: true as boolean,
@@ -84,9 +89,16 @@ export const sessionMessages: unknown[] = [
 ];
 export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
 export const createOpenClawCodingToolsMock = vi.fn(() => []);
+export const resolveSandboxContextMock: Mock<(params?: unknown) => Promise<MockSandboxContext>> =
+  vi.fn(async () => null);
+export const createBundleMcpToolRuntimeMock = vi.fn(async () => ({
+  tools: [],
+  dispose: vi.fn(async () => {}),
+}));
 export const resolveEmbeddedAgentStreamFnMock: Mock<
   (params?: unknown) => MockEmbeddedAgentStreamFn
 > = vi.fn((_params?: unknown) => vi.fn());
+export const registerProviderStreamForModelMock: Mock<(params?: unknown) => unknown> = vi.fn();
 export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: {} }));
 export const resolveAgentTransportOverrideMock: Mock<(params?: unknown) => string | undefined> =
   vi.fn(() => undefined);
@@ -133,6 +145,8 @@ export function resetCompactSessionStateMocks(): void {
   sessionAbortCompactionMock.mockReset();
   resolveEmbeddedAgentStreamFnMock.mockReset();
   resolveEmbeddedAgentStreamFnMock.mockImplementation((_params?: unknown) => vi.fn());
+  registerProviderStreamForModelMock.mockReset();
+  registerProviderStreamForModelMock.mockReturnValue(undefined);
   applyExtraParamsToAgentMock.mockReset();
   applyExtraParamsToAgentMock.mockReturnValue({ effectiveExtraParams: {} });
   resolveAgentTransportOverrideMock.mockReset();
@@ -182,6 +196,13 @@ export function resetCompactHooksHarnessMocks(): void {
   resetCompactSessionStateMocks();
   createOpenClawCodingToolsMock.mockReset();
   createOpenClawCodingToolsMock.mockReturnValue([]);
+  resolveSandboxContextMock.mockReset();
+  resolveSandboxContextMock.mockResolvedValue(null);
+  createBundleMcpToolRuntimeMock.mockReset();
+  createBundleMcpToolRuntimeMock.mockResolvedValue({
+    tools: [],
+    dispose: vi.fn(async () => {}),
+  });
 }
 
 export async function loadCompactHooksHarness(): Promise<{
@@ -199,6 +220,10 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../runtime-plugins.js", () => ({
     ensureRuntimePluginsLoaded,
+  }));
+
+  vi.doMock("../provider-stream.js", () => ({
+    registerProviderStreamForModel: registerProviderStreamForModelMock,
   }));
 
   vi.doMock("../../hooks/internal-hooks.js", async () => {
@@ -287,7 +312,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../sandbox.js", () => ({
-    resolveSandboxContext: vi.fn(async () => null),
+    resolveSandboxContext: resolveSandboxContextMock,
   }));
 
   vi.doMock("../session-file-repair.js", () => ({
@@ -324,10 +349,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../pi-bundle-mcp-tools.js", () => ({
-    createBundleMcpToolRuntime: vi.fn(async () => ({
-      tools: [],
-      dispose: vi.fn(async () => {}),
-    })),
+    createBundleMcpToolRuntime: createBundleMcpToolRuntimeMock,
   }));
 
   vi.doMock("../pi-bundle-lsp-runtime.js", () => ({

@@ -39,6 +39,7 @@ export function createPluginRecord(
     source: overrides.source ?? `/tmp/${id}/index.ts`,
     origin: overrides.origin ?? "workspace",
     enabled: overrides.enabled ?? true,
+    enabledByDefault: overrides.enabledByDefault,
     explicitlyEnabled: overrides.explicitlyEnabled ?? overrides.enabled ?? true,
     activated: overrides.activated ?? overrides.enabled ?? true,
     activationSource:
@@ -59,6 +60,7 @@ export function createPluginRecord(
     musicGenerationProviderIds: [],
     webFetchProviderIds: [],
     webSearchProviderIds: [],
+    mcpServerNames: [],
     memoryEmbeddingProviderIds: [],
     gatewayMethods: [],
     cliCommands: [],
@@ -119,6 +121,7 @@ export function createPluginLoadResult(
     channels: [],
     channelSetups: [],
     providers: [],
+    mcpServers: [],
     speechProviders: [],
     mediaUnderstandingProviders: [],
     imageGenerationProviders: [],
