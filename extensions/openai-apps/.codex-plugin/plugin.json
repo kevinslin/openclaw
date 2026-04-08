@@ -1,0 +1,24 @@
+{
+  "name": "OpenAI Apps",
+  "version": "2026.3.29",
+  "description": "Bundle-owned MCP bridge for exposing OpenAI apps in OpenClaw.",
+  "author": {
+    "name": "OpenClaw"
+  },
+  "homepage": "https://openclaw.ai",
+  "repository": "https://github.com/openclaw/openclaw",
+  "license": "MIT",
+  "keywords": ["openclaw", "openai", "apps", "mcp", "connectors"],
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "OpenAI Apps",
+    "shortDescription": "Expose OpenAI app connectors to OpenClaw through a bundle-owned MCP bridge",
+    "longDescription": "Runs the OpenAI apps bridge as a Codex-compatible MCP bundle so OpenClaw can publish and invoke enabled OpenAI app connectors from a bundle-owned app-server runtime.",
+    "developerName": "OpenClaw",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Read", "Write"],
+    "defaultPrompt": [
+      "Use OpenAI Apps to inspect and invoke enabled OpenAI app connectors for this workspace"
+    ]
+  }
+}
