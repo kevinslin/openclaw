@@ -18,8 +18,8 @@ import {
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const sourceCliPath = path.join(repositoryRoot, "scripts/verify-release-operation.mjs");
-const repository = "kevinlin-openai/openclaw";
-const canonicalUrl = "https://github.com/kevinlin-openai/openclaw.git";
+const repository = "kevinslin/openclaw";
+const canonicalUrl = "https://github.com/kevinslin/openclaw.git";
 const tempRoots: string[] = [];
 
 type Operation =
@@ -253,7 +253,7 @@ describe("verify-release-operation CLI", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toBe(
-      '{"schemaVersion":1,"supportedContractVersions":[1],"repository":"kevinlin-openai/openclaw","canonicalFetchUrl":"https://github.com/kevinlin-openai/openclaw.git"}\n',
+      '{"schemaVersion":1,"supportedContractVersions":[1],"repository":"kevinslin/openclaw","canonicalFetchUrl":"https://github.com/kevinslin/openclaw.git"}\n',
     );
   });
 
