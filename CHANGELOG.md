@@ -8,6 +8,16 @@ Docs: https://docs.openclaw.ai
 
 - **WeChat account routing:** `startAccount` preserves session routing by resolving manifest channel account config from raw account keys with opaque provider ids, while still ignoring manifest account keys that normalize to blocked object keys. (#93686) Thanks @zhangguiping-xydt.
 
+## 2026.6.33
+
+Fork-only stable release test for the trailing-month release policy. This release verifies the `stable/2026.6.33` branch and tag, production package build, tarball installation, checksums, and GitHub Release assets without publishing to npm or invoking Full Release Validation.
+
+### Release engineering
+
+- Adds authenticated stable branch, tag, and default-branch policy verification for the personal fork release.
+- Produces an installable `2026.6.33` tarball plus checksums, verifier evidence, and a release manifest.
+- Keeps npm publication, registry dist-tag changes, plugins, ClawHub, macOS, and Windows publication out of scope.
+
 ## 2026.6.10
 
 Automatic fast mode starts short conversations quickly, then returns longer or fallback work to normal mode without losing visible state. Provider routing, channel progress, session identity, and trusted tool policies are more reliable, with smaller improvements spanning provider setup, diagnostics, and transcript tooling.
