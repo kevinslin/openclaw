@@ -185,9 +185,11 @@ jobs:
 
           install_prefix="$RUNNER_TEMP/fork-release-install"
           npm install --global --prefix "$install_prefix" "$tarball_path"
-          installed_version="$("$install_prefix/bin/openclaw" --version)"
+          installed_output="$("$install_prefix/bin/openclaw" --version)"
+          installed_version="${installed_output#OpenClaw }"
+          installed_version="${installed_version%% *}"
           if [[ "$installed_version" != "$RELEASE_VERSION" ]]; then
-            echo "Installed fork release reports $installed_version, expected $RELEASE_VERSION." >&2
+            echo "Installed fork release reports $installed_output, expected version $RELEASE_VERSION." >&2
             exit 1
           fi
 
