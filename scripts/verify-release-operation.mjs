@@ -10,8 +10,8 @@ import { pathToFileURL } from "node:url";
 const CONTRACT_VERSION = 1;
 // This fork deliberately roots release authority in its own protected main.
 // Keeping these values compiled into the verifier prevents dispatch inputs from redirecting trust.
-const REPOSITORY = "kevinlin-openai/openclaw";
-const CANONICAL_FETCH_URL = "https://github.com/kevinlin-openai/openclaw.git";
+const REPOSITORY = "kevinslin/openclaw";
+const CANONICAL_FETCH_URL = "https://github.com/kevinslin/openclaw.git";
 const POLICY_MAIN_REF = "refs/heads/main";
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
 const DECIMAL_PATTERN = /^[1-9][0-9]*$/u;
@@ -718,7 +718,7 @@ function enforceExecutionTip(input, target, policySha, releaseClass) {
 async function verify(options) {
   const input = readInput(options.inputPath);
   if (process.env.GITHUB_REPOSITORY !== REPOSITORY) {
-    reject("repository-identity-mismatch", "GITHUB_REPOSITORY must be openclaw/openclaw");
+    reject("repository-identity-mismatch", `GITHUB_REPOSITORY must be ${REPOSITORY}`);
   }
   validateExecutionEnvironment(input.execution);
 

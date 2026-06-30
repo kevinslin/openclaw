@@ -25,7 +25,8 @@ describe("fork stable release workflow", () => {
     expect(workflow.on.workflow_dispatch.inputs.confirm_repository.required).toBe(true);
     expect(workflow.on.workflow_dispatch.inputs.publish_release.default).toBe(false);
     expect(workflow.permissions).toEqual({ contents: "read" });
-    expect(workflow.env.FORK_REPOSITORY).toBe("kevinlin-openai/openclaw");
+    expect(workflow.env.FORK_REPOSITORY).toBe("kevinslin/openclaw");
+    expect(workflow.jobs.build["runs-on"]).toBe("ubuntu-latest");
     expect(workflow.jobs.build.permissions).toEqual({ contents: "read" });
     expect(workflow.jobs.publish.environment).toBe("fork-release");
     expect(workflow.jobs.publish.permissions).toEqual({ contents: "write" });
