@@ -244,6 +244,7 @@ jobs:
       # IF A CHECK CAN TAKE A LONG TIME, NEEDS LIVE CREDENTIALS, OR IS KNOWN TO BE FLAKY,
       # IT BELONGS IN openclaw-release-checks.yml INSTEAD OF BLOCKING npm PUBLISH.
       - name: Verify release contents
+        if: ${{ !inputs.fork_core_npm_only }}
         run: pnpm release:check
 
       - name: Generate dependency release evidence

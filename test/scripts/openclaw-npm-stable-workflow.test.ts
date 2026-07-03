@@ -115,6 +115,9 @@ describe("minimal npm stable workflow", () => {
     expect(raw).toContain("FORK_CORE_NPM_ONLY: ${{ inputs.fork_core_npm_only }}");
     expect(raw).toContain("HISTORICAL_STABLE_TEST: ${{ inputs.historical_stable_test }}");
     expect(raw).toContain("NPM_PACKAGE_NAME: ${{ inputs.npm_package_name }}");
+    expect(step(parsed.jobs?.preflight_openclaw_npm, "Verify release contents").if).toBe(
+      "${{ !inputs.fork_core_npm_only }}",
+    );
   });
 
   it("authenticates exact stable run and Full Validation identities", () => {
