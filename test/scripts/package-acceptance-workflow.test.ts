@@ -1936,7 +1936,7 @@ describe("package artifact reuse", () => {
     expect(npmWorkflow).toContain("npm_package_name:");
     expect(npmWorkflow).toContain("default: openclaw");
     expect(npmWorkflow).toContain("kevinslin/openclaw");
-    expect(npmWorkflow).toContain("dev/kevinlin/integ-stable-2000-1");
+    expect(npmWorkflow).toContain("dev/kevinlin/integ-stable-2000-2");
     expect(npmWorkflow).toContain("@kevins8/openclaw-stable-e2e");
     expect(npmWorkflow).toContain(
       "Fork npm test mode requires the fixed repository, branch, package, and boolean inputs.",
