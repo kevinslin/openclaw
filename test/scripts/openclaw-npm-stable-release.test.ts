@@ -6,6 +6,7 @@ import {
   parseStableGuardBypass,
   stableSelectorRepairCommand,
   validateFullReleaseValidationManifest,
+  validateForkNpmTestContract,
   validateNpmPublishBoundary,
   validateStableNpmReleaseRequest,
   validateStableRunIdentity,
@@ -14,6 +15,54 @@ import {
 
 const sha = "a".repeat(40);
 const branch = "stable/2026.6.33";
+
+describe("fork npm test contract", () => {
+  const valid = {
+    repository: "kevinslin/openclaw",
+    workflowRef: "refs/heads/dev/kevinlin/integ-stable-2000-1",
+    packageName: "@kevins8/openclaw-stable-e2e",
+    forkCoreNpmOnly: true,
+    historicalStableTest: true,
+    bypassStableGuard: true,
+    npmDistTag: "stable",
+  };
+
+  it("accepts only the fixed fork canary identity", () => {
+    expect(validateForkNpmTestContract(valid)).toEqual({
+      enabled: true,
+      packageName: "@kevins8/openclaw-stable-e2e",
+      stableBranch: "dev/kevinlin/integ-stable-2000-1",
+    });
+  });
+
+  it.each([
+    ["repository", { repository: "openclaw/openclaw" }],
+    ["branch", { workflowRef: "refs/heads/main" }],
+    ["package", { packageName: "@kevins8/other" }],
+    ["fork flag", { forkCoreNpmOnly: false }],
+    ["historical flag", { historicalStableTest: false }],
+    ["bypass", { bypassStableGuard: false }],
+    ["dist-tag", { npmDistTag: "beta" }],
+  ])("rejects a mismatched %s", (_label, changes) => {
+    expect(() => validateForkNpmTestContract({ ...valid, ...changes })).toThrow(
+      /fixed repository, branch, package/u,
+    );
+  });
+
+  it("preserves the canonical upstream defaults", () => {
+    expect(
+      validateForkNpmTestContract({
+        repository: "openclaw/openclaw",
+        workflowRef: "refs/heads/main",
+        packageName: "openclaw",
+        forkCoreNpmOnly: false,
+        historicalStableTest: false,
+        bypassStableGuard: false,
+        npmDistTag: "latest",
+      }),
+    ).toEqual({ enabled: false, packageName: "openclaw" });
+  });
+});
 
 describe("npm stable publication boundary", () => {
   it("parses only explicit boolean stable guard values", () => {
@@ -220,6 +269,26 @@ describe("stable npm release request", () => {
     ).toThrow(/stable branch tip SHAs must match/u);
   });
 
+  it("allows the fixed historical fork branch while preserving exact SHA identity", () => {
+    expect(
+      validateStableNpmReleaseRequest({
+        ...valid,
+        bypassStableGuard: true,
+        historicalStableTest: true,
+        releaseTag: "v2000.1.33",
+        npmWorkflowRef: "refs/heads/dev/kevinlin/integ-stable-2000-1",
+        packageVersion: "2000.1.33",
+        mainPackageVersion: "",
+      }),
+    ).toEqual({
+      stable: true,
+      releaseVersion: "2000.1.33",
+      stableBranch: "dev/kevinlin/integ-stable-2000-1",
+      bypassStableGuard: true,
+      historicalStableTest: true,
+    });
+  });
+
   it("rejects bypass on a regular npm release request", () => {
     expect(() =>
       validateStableNpmReleaseRequest({
@@ -365,6 +434,18 @@ describe("stable registry readback", () => {
     expect(sleep).toHaveBeenCalledTimes(11);
     expect(sleep.mock.calls.every(([delay]) => delay === 10_000)).toBe(true);
   });
+
+  it("queries the fixed fork package when supplied", async () => {
+    const query = vi.fn(async () => ({ status: 0, stdout: "2000.1.33\n" }));
+    await verifyStableRegistryReadback({
+      expectedVersion: "2000.1.33",
+      packageName: "@kevins8/openclaw-stable-e2e",
+      query,
+      sleep: vi.fn(async () => {}),
+    });
+    expect(query).toHaveBeenNthCalledWith(1, "@kevins8/openclaw-stable-e2e@2000.1.33");
+    expect(query).toHaveBeenNthCalledWith(2, "@kevins8/openclaw-stable-e2e@stable");
+  });
 });
 
 describe("stable selector repair", () => {
@@ -373,5 +454,8 @@ describe("stable selector repair", () => {
       "npm dist-tag add openclaw@2026.5.40 stable",
     );
     expect(stableSelectorRepairCommand("absent")).toBe("npm dist-tag rm openclaw stable");
+    expect(stableSelectorRepairCommand("absent", "@kevins8/openclaw-stable-e2e")).toBe(
+      "npm dist-tag rm @kevins8/openclaw-stable-e2e stable",
+    );
   });
 });

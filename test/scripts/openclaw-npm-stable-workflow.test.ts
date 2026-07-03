@@ -11,6 +11,9 @@ type Workflow = {
     workflow_dispatch?: {
       inputs?: {
         bypass_stable_guard?: { default?: boolean; type?: string };
+        fork_core_npm_only?: { default?: boolean; type?: string };
+        historical_stable_test?: { default?: boolean; type?: string };
+        npm_package_name?: { default?: string; type?: string };
         npm_dist_tag?: { options?: string[] };
       };
     };
@@ -96,6 +99,22 @@ describe("minimal npm stable workflow", () => {
     const summary = step(parsed.jobs?.publish_openclaw_npm, "Summarize stable npm publication");
     expect(summary.env?.BYPASS_STABLE_GUARD).toBe("${{ inputs.bypass_stable_guard }}");
     expect(summary.run).toContain("Stable guard bypass: ${BYPASS_STABLE_GUARD}");
+  });
+
+  it("closes the historical fork inputs to the fixed test identity", () => {
+    const parsed = workflow();
+    const inputs = parsed.on?.workflow_dispatch?.inputs;
+    expect(inputs?.fork_core_npm_only).toMatchObject({ default: false, type: "boolean" });
+    expect(inputs?.historical_stable_test).toMatchObject({ default: false, type: "boolean" });
+    expect(inputs?.npm_package_name).toMatchObject({ default: "openclaw", type: "string" });
+
+    const raw = readFileSync(workflowPath, "utf8");
+    expect(raw).toContain("kevinslin/openclaw");
+    expect(raw).toContain("refs/heads/dev/kevinlin/integ-stable-2000-1");
+    expect(raw).toContain("@kevins8/openclaw-stable-e2e");
+    expect(raw).toContain("FORK_CORE_NPM_ONLY: ${{ inputs.fork_core_npm_only }}");
+    expect(raw).toContain("HISTORICAL_STABLE_TEST: ${{ inputs.historical_stable_test }}");
+    expect(raw).toContain("NPM_PACKAGE_NAME: ${{ inputs.npm_package_name }}");
   });
 
   it("authenticates exact stable run and Full Validation identities", () => {

@@ -1928,6 +1928,28 @@ describe("package artifact reuse", () => {
     expect(npmWorkflow).not.toContain('TARBALL_NAME="$(basename "$PACK_PATH")"');
   });
 
+  it("allows only the fixed fork historical npm canary without changing upstream defaults", () => {
+    const npmWorkflow = readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8");
+
+    expect(npmWorkflow).toContain("fork_core_npm_only:");
+    expect(npmWorkflow).toContain("historical_stable_test:");
+    expect(npmWorkflow).toContain("npm_package_name:");
+    expect(npmWorkflow).toContain("default: openclaw");
+    expect(npmWorkflow).toContain("kevinslin/openclaw");
+    expect(npmWorkflow).toContain("dev/kevinlin/integ-stable-2000-1");
+    expect(npmWorkflow).toContain("@kevins8/openclaw-stable-e2e");
+    expect(npmWorkflow).toContain(
+      "Fork npm test mode requires the fixed repository, branch, package, and boolean inputs.",
+    );
+    expect(npmWorkflow).toContain("Retarget fork npm package");
+    expect(npmWorkflow).toContain("retarget-openclaw-npm-package.mjs");
+    expect(npmWorkflow).toContain(
+      "github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-latest'",
+    );
+    expect(npmWorkflow).toContain('npm view "${NPM_PACKAGE_NAME}@${PACKAGE_VERSION}" version');
+    expect(npmWorkflow).toContain('"$TARBALL_PATH" "$PACKAGE_VERSION" "$NPM_PACKAGE_NAME"');
+  });
+
   it("gates stable GitHub publication on the Windows Hub release asset contract", () => {
     const releaseWorkflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
     const windowsWorkflow = readFileSync(WINDOWS_NODE_RELEASE_WORKFLOW, "utf8");
@@ -2140,7 +2162,7 @@ describe("package artifact reuse", () => {
       "uses: openclaw/clawhub/.github/workflows/package-publish.yml@d8096dfc039e86ab942ddf9ef117d04849fd84c1",
     );
     expect(clawHubWorkflow).toContain(
-      "family: ${{ contains(fromJson('[\"@openclaw/acpx\",\"@openclaw/diffs\",\"@openclaw/feishu\",\"@openclaw/qqbot\"]'), matrix.plugin.packageName) && 'bundle-plugin' || '' }}",
+      'family: ${{ contains(fromJson(\'["@openclaw/acpx","@openclaw/diffs","@openclaw/feishu","@openclaw/qqbot"]\'), matrix.plugin.packageName) && \'bundle-plugin\' || \'\' }}',
     );
     expect(clawHubWorkflow).toContain("dry_run:");
     expect(clawHubWorkflow).toContain("default: false");

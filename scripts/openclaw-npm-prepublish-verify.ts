@@ -16,23 +16,26 @@ import {
 import { resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
 
 type InstalledPackageJson = {
+  name?: string;
   version?: string;
 };
 
 export type OpenClawNpmPrepublishVerifyArgs =
   | {
       expectedVersion?: string;
+      expectedPackageName?: string;
       help: false;
       tarballPath: string;
     }
   | {
       expectedVersion?: undefined;
+      expectedPackageName?: undefined;
       help: true;
       tarballPath: "";
     };
 
 export function openClawNpmPrepublishVerifyUsage(): string {
-  return "Usage: node --import tsx scripts/openclaw-npm-prepublish-verify.ts <tarball.tgz> [expected-version]";
+  return "Usage: node --import tsx scripts/openclaw-npm-prepublish-verify.ts <tarball.tgz> [expected-version] [expected-package-name]";
 }
 
 export function parseOpenClawNpmPrepublishVerifyArgs(
@@ -54,14 +57,31 @@ export function parseOpenClawNpmPrepublishVerifyArgs(
   if (expectedVersion?.startsWith("-")) {
     throw new Error(`Unknown openclaw npm prepublish verifier option: ${expectedVersion}`);
   }
-  const extraArg = args[2]?.trim();
+  const expectedPackageName = args[2]?.trim();
+  if (expectedPackageName?.startsWith("-")) {
+    throw new Error(`Unknown openclaw npm prepublish verifier option: ${expectedPackageName}`);
+  }
+  const extraArg = args[3]?.trim();
   if (extraArg) {
     throw new Error(`Unexpected openclaw npm prepublish verifier argument: ${extraArg}`);
   }
 
-  return expectedVersion
-    ? { expectedVersion, help: false, tarballPath }
-    : { help: false, tarballPath };
+  return {
+    ...(expectedVersion ? { expectedVersion } : {}),
+    ...(expectedPackageName ? { expectedPackageName } : {}),
+    help: false,
+    tarballPath,
+  };
+}
+
+function installedPackagePathSegments(packageName: string): string[] {
+  if (packageName === "openclaw") {
+    return [packageName];
+  }
+  if (!/^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/u.test(packageName)) {
+    throw new Error(`invalid expected npm package name: ${packageName}`);
+  }
+  return packageName.split("/");
 }
 
 function npmExec(args: string[], cwd: string): string {
@@ -98,7 +118,8 @@ function main(argv = process.argv.slice(2)): void {
       workingDir,
     );
     const globalRoot = npmExec(["root", "-g", "--prefix", prefixDir], workingDir);
-    const packageRoot = join(globalRoot, "openclaw");
+    const expectedPackageName = args.expectedPackageName || "openclaw";
+    const packageRoot = join(globalRoot, ...installedPackagePathSegments(expectedPackageName));
     const pkg = JSON.parse(
       readFileSync(join(packageRoot, "package.json"), "utf8"),
     ) as InstalledPackageJson;
@@ -108,6 +129,11 @@ function main(argv = process.argv.slice(2)): void {
       installedVersion: pkg.version?.trim() ?? "",
       packageRoot,
     });
+    if (pkg.name !== expectedPackageName) {
+      errors.push(
+        `installed npm package name mismatch: expected ${expectedPackageName}, found ${pkg.name || "<missing>"}.`,
+      );
+    }
     const binaryInvocation = resolveInstalledBinaryCommandInvocation(prefixDir, ["--version"]);
     const installedBinaryVersion = runNpmVerifyCommand(binaryInvocation, workingDir);
     if (normalizeInstalledBinaryVersion(installedBinaryVersion) !== resolvedExpectedVersion) {

@@ -39,9 +39,24 @@ on:
         required: true
         default: false
         type: boolean
+      fork_core_npm_only:
+        description: Fork test only; publish the core package under the fixed fork-owned npm identity
+        required: true
+        default: false
+        type: boolean
+      npm_package_name:
+        description: npm package name; fork test mode requires @kevins8/openclaw-stable-e2e
+        required: true
+        default: openclaw
+        type: string
+      historical_stable_test:
+        description: Fork test only; allow the fixed historical stable canary branch
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && format('openclaw-npm-release-{0}-{1}-preflight', inputs.tag, inputs.npm_dist_tag) || github.event_name == 'workflow_dispatch' && format('openclaw-npm-release-{0}-{1}-publish-{2}', inputs.tag, inputs.npm_dist_tag, github.run_id) || format('openclaw-npm-release-{0}', github.ref) }}
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && format('openclaw-npm-release-{0}-{1}-{2}-preflight', inputs.npm_package_name, inputs.tag, inputs.npm_dist_tag) || github.event_name == 'workflow_dispatch' && format('openclaw-npm-release-{0}-{1}-{2}-publish-{3}', inputs.npm_package_name, inputs.tag, inputs.npm_dist_tag, github.run_id) || format('openclaw-npm-release-{0}', github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && inputs.npm_dist_tag == 'alpha' }}
 
 env:
@@ -57,8 +72,8 @@ jobs:
   # so this source workflow can stay focused on OIDC publish only.
   preflight_openclaw_npm:
     if: ${{ inputs.preflight_only }}
-    # Preflight builds the full release package before publish; ubuntu-latest can OOM in tsdown.
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    # Upstream uses Blacksmith for headroom; forks fall back to a generally available hosted runner.
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:
@@ -67,6 +82,11 @@ jobs:
           RELEASE_REF: ${{ inputs.tag }}
           PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          FORK_CORE_NPM_ONLY: ${{ inputs.fork_core_npm_only }}
+          HISTORICAL_STABLE_TEST: ${{ inputs.historical_stable_test }}
+          NPM_PACKAGE_NAME: ${{ inputs.npm_package_name }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           if [[ ! "${RELEASE_REF}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]] && [[ ! "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
@@ -83,6 +103,15 @@ jobs:
           fi
           if [[ "${RELEASE_REF}" == *"-beta."* && "${RELEASE_NPM_DIST_TAG}" != "beta" ]]; then
             echo "Beta prerelease tags must publish to npm dist-tag beta."
+            exit 1
+          fi
+          if [[ "${RELEASE_REPOSITORY}" == "openclaw/openclaw" ]]; then
+            if [[ "${NPM_PACKAGE_NAME}" != "openclaw" || "${FORK_CORE_NPM_ONLY}" != "false" || "${HISTORICAL_STABLE_TEST}" != "false" ]]; then
+              echo "The canonical repository may not enable fork npm test mode." >&2
+              exit 1
+            fi
+          elif [[ "${RELEASE_REPOSITORY}" != "kevinslin/openclaw" || "${WORKFLOW_REF}" != "refs/heads/dev/kevinlin/integ-stable-2000-1" || "${NPM_PACKAGE_NAME}" != "@kevins8/openclaw-stable-e2e" || "${FORK_CORE_NPM_ONLY}" != "true" || "${HISTORICAL_STABLE_TEST}" != "true" ]]; then
+            echo "Fork npm test mode requires the fixed repository, branch, package, and boolean inputs." >&2
             exit 1
           fi
 
@@ -129,7 +158,11 @@ jobs:
       - name: Validate npm release request
         env:
           BYPASS_STABLE_GUARD: ${{ inputs.bypass_stable_guard }}
+          FORK_CORE_NPM_ONLY: ${{ inputs.fork_core_npm_only }}
+          HISTORICAL_STABLE_TEST: ${{ inputs.historical_stable_test }}
+          NPM_PACKAGE_NAME: ${{ inputs.npm_package_name }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.tag }}
           NPM_WORKFLOW_REF: ${{ github.ref }}
         run: node scripts/openclaw-npm-stable-release.mjs validate-request
@@ -137,20 +170,21 @@ jobs:
       - name: Ensure version is not already published
         env:
           PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
+          NPM_PACKAGE_NAME: ${{ inputs.npm_package_name }}
         run: |
           set -euo pipefail
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
 
-          if npm view "openclaw@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
+          if npm view "${NPM_PACKAGE_NAME}@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
             if [[ "${PREFLIGHT_ONLY}" == "true" ]]; then
-              echo "openclaw@${PACKAGE_VERSION} is already published on npm; continuing because preflight_only=true."
+              echo "${NPM_PACKAGE_NAME}@${PACKAGE_VERSION} is already published on npm; continuing because preflight_only=true."
               exit 0
             fi
-            echo "openclaw@${PACKAGE_VERSION} is already published on npm."
+            echo "${NPM_PACKAGE_NAME}@${PACKAGE_VERSION} is already published on npm."
             exit 1
           fi
 
-          echo "Publishing openclaw@${PACKAGE_VERSION}"
+          echo "Publishing ${NPM_PACKAGE_NAME}@${PACKAGE_VERSION}"
 
       - name: Check
         env:
@@ -226,6 +260,16 @@ jobs:
             --github-output "$GITHUB_OUTPUT" \
             --github-step-summary "$GITHUB_STEP_SUMMARY"
 
+      - name: Retarget fork npm package
+        if: ${{ inputs.npm_package_name != 'openclaw' }}
+        env:
+          NPM_PACKAGE_NAME: ${{ inputs.npm_package_name }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          node scripts/retarget-openclaw-npm-package.mjs \
+            --package-name "$NPM_PACKAGE_NAME" \
+            --repository "$RELEASE_REPOSITORY"
+
       - name: Pack prepared npm tarball
         id: packed_tarball
         env:
@@ -233,6 +277,7 @@ jobs:
           RELEASE_REF: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           DEPENDENCY_EVIDENCE_DIR: ${{ steps.dependency_evidence.outputs.dir }}
+          NPM_PACKAGE_NAME: ${{ inputs.npm_package_name }}
         run: |
           set -euo pipefail
           PACK_OUTPUT="$RUNNER_TEMP/npm-pack-output.txt"
@@ -330,7 +375,7 @@ jobs:
           printf '%s\n' "$RELEASE_TAG" > "$ARTIFACT_DIR/release-tag.txt"
           printf '%s\n' "$RELEASE_SHA" > "$ARTIFACT_DIR/release-sha.txt"
           printf '%s\n' "$RELEASE_NPM_DIST_TAG" > "$ARTIFACT_DIR/release-npm-dist-tag.txt"
-          ARTIFACT_DIR="$ARTIFACT_DIR" RELEASE_TAG="$RELEASE_TAG" RELEASE_SHA="$RELEASE_SHA" RELEASE_NPM_DIST_TAG="$RELEASE_NPM_DIST_TAG" PACKAGE_VERSION="$PACKAGE_VERSION" TARBALL_NAME="$TARBALL_NAME" TARBALL_SHA256="$TARBALL_SHA256" node <<'NODE'
+          ARTIFACT_DIR="$ARTIFACT_DIR" RELEASE_TAG="$RELEASE_TAG" RELEASE_SHA="$RELEASE_SHA" RELEASE_NPM_DIST_TAG="$RELEASE_NPM_DIST_TAG" NPM_PACKAGE_NAME="$NPM_PACKAGE_NAME" PACKAGE_VERSION="$PACKAGE_VERSION" TARBALL_NAME="$TARBALL_NAME" TARBALL_SHA256="$TARBALL_SHA256" node <<'NODE'
           const fs = require("node:fs");
           const path = require("node:path");
           const manifest = {
@@ -338,7 +383,7 @@ jobs:
             releaseTag: process.env.RELEASE_TAG,
             releaseSha: process.env.RELEASE_SHA,
             npmDistTag: process.env.RELEASE_NPM_DIST_TAG,
-            packageName: "openclaw",
+            packageName: process.env.NPM_PACKAGE_NAME,
             packageVersion: process.env.PACKAGE_VERSION,
             tarballName: process.env.TARBALL_NAME,
             tarballSha256: process.env.TARBALL_SHA256,
@@ -356,6 +401,7 @@ jobs:
       - name: Verify prepared npm tarball install
         env:
           PREFLIGHT_ARTIFACT_DIR: ${{ steps.packed_tarball.outputs.dir }}
+          NPM_PACKAGE_NAME: ${{ inputs.npm_package_name }}
         run: |
           set -euo pipefail
           TARBALL_PATH="$(find "$PREFLIGHT_ARTIFACT_DIR" -maxdepth 1 -type f -name '*.tgz' -print | sort | tail -n 1)"
@@ -365,7 +411,8 @@ jobs:
             exit 1
           fi
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          node --import tsx scripts/openclaw-npm-prepublish-verify.ts "$TARBALL_PATH" "$PACKAGE_VERSION"
+          node --import tsx scripts/openclaw-npm-prepublish-verify.ts \
+            "$TARBALL_PATH" "$PACKAGE_VERSION" "$NPM_PACKAGE_NAME"
 
       - name: Upload dependency release evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -412,7 +459,11 @@ jobs:
       - name: Validate npm release request
         env:
           BYPASS_STABLE_GUARD: ${{ inputs.bypass_stable_guard }}
+          FORK_CORE_NPM_ONLY: ${{ inputs.fork_core_npm_only }}
+          HISTORICAL_STABLE_TEST: ${{ inputs.historical_stable_test }}
+          NPM_PACKAGE_NAME: ${{ inputs.npm_package_name }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.tag }}
           NPM_WORKFLOW_REF: ${{ github.ref }}
         run: node scripts/openclaw-npm-stable-release.mjs validate-request
@@ -421,18 +472,23 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          HISTORICAL_STABLE_TEST: ${{ inputs.historical_stable_test }}
           WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           tideclaw_alpha_publish=false
           stable_publish=false
+          historical_stable_publish=false
           if [[ "${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" == "alpha" && "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
             tideclaw_alpha_publish=true
           fi
           if [[ "${RELEASE_NPM_DIST_TAG}" == "stable" && "${WORKFLOW_REF}" == refs/heads/stable/* ]]; then
             stable_publish=true
           fi
-          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]] && [[ "${tideclaw_alpha_publish}" != "true" ]] && [[ "${stable_publish}" != "true" ]]; then
+          if [[ "${RELEASE_NPM_DIST_TAG}" == "stable" && "${HISTORICAL_STABLE_TEST}" == "true" && "${WORKFLOW_REF}" == "refs/heads/dev/kevinlin/integ-stable-2000-1" ]]; then
+            historical_stable_publish=true
+          fi
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]] && [[ "${tideclaw_alpha_publish}" != "true" ]] && [[ "${stable_publish}" != "true" ]] && [[ "${historical_stable_publish}" != "true" ]]; then
             echo "Real publish runs must be dispatched from main, release/YYYY.M.PATCH, the exact validated stable branch, or a Tideclaw alpha branch for alpha prereleases. Use preflight_only=true for other branch validation."
             exit 1
           fi
@@ -441,6 +497,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          HISTORICAL_STABLE_TEST: ${{ inputs.historical_stable_test }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
@@ -453,6 +510,8 @@ jobs:
           if [[ -z "${FULL_RELEASE_VALIDATION_RUN_ID}" ]]; then
             if [[ "${RELEASE_TAG}" == *"-beta."* && "${RELEASE_NPM_DIST_TAG}" == "beta" ]]; then
               echo "::warning::Beta publish is proceeding from npm preflight only; full release validation remains required before stable/latest promotion."
+            elif [[ "${HISTORICAL_STABLE_TEST}" == "true" && "${RELEASE_NPM_DIST_TAG}" == "stable" ]]; then
+              echo "::warning::Fork historical stable canary is proceeding from npm preflight only."
             else
               echo "Real publish requires full_release_validation_run_id from a successful Full Release Validation run." >&2
               exit 1
@@ -502,6 +561,11 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          FORK_CORE_NPM_ONLY: ${{ inputs.fork_core_npm_only }}
+          HISTORICAL_STABLE_TEST: ${{ inputs.historical_stable_test }}
+          NPM_PACKAGE_NAME: ${{ inputs.npm_package_name }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
@@ -514,6 +578,15 @@ jobs:
           fi
           if [[ "${RELEASE_TAG}" == *"-beta."* && "${RELEASE_NPM_DIST_TAG}" != "beta" ]]; then
             echo "Beta prerelease tags must publish to npm dist-tag beta."
+            exit 1
+          fi
+          if [[ "${RELEASE_REPOSITORY}" == "openclaw/openclaw" ]]; then
+            if [[ "${NPM_PACKAGE_NAME}" != "openclaw" || "${FORK_CORE_NPM_ONLY}" != "false" || "${HISTORICAL_STABLE_TEST}" != "false" ]]; then
+              echo "The canonical repository may not enable fork npm test mode." >&2
+              exit 1
+            fi
+          elif [[ "${RELEASE_REPOSITORY}" != "kevinslin/openclaw" || "${WORKFLOW_REF}" != "refs/heads/dev/kevinlin/integ-stable-2000-1" || "${NPM_PACKAGE_NAME}" != "@kevins8/openclaw-stable-e2e" || "${FORK_CORE_NPM_ONLY}" != "true" || "${HISTORICAL_STABLE_TEST}" != "true" ]]; then
+            echo "Fork npm test mode requires the fixed repository, branch, package, and boolean inputs." >&2
             exit 1
           fi
 
@@ -552,16 +625,18 @@ jobs:
           install-bun: "false"
 
       - name: Ensure version is not already published
+        env:
+          NPM_PACKAGE_NAME: ${{ inputs.npm_package_name }}
         run: |
           set -euo pipefail
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
 
-          if npm view "openclaw@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
-            echo "openclaw@${PACKAGE_VERSION} is already published on npm."
+          if npm view "${NPM_PACKAGE_NAME}@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
+            echo "${NPM_PACKAGE_NAME}@${PACKAGE_VERSION} is already published on npm."
             exit 1
           fi
 
-          echo "Publishing openclaw@${PACKAGE_VERSION}"
+          echo "Publishing ${NPM_PACKAGE_NAME}@${PACKAGE_VERSION}"
 
       - name: Verify preflight run metadata
         env:
@@ -676,6 +751,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          NPM_PACKAGE_NAME: ${{ inputs.npm_package_name }}
         run: |
           set -euo pipefail
           EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
@@ -688,6 +764,7 @@ jobs:
           ARTIFACT_RELEASE_TAG="$(jq -r '.releaseTag // ""' "$MANIFEST_FILE")"
           ARTIFACT_RELEASE_SHA="$(jq -r '.releaseSha // ""' "$MANIFEST_FILE")"
           ARTIFACT_RELEASE_NPM_DIST_TAG="$(jq -r '.npmDistTag // ""' "$MANIFEST_FILE")"
+          ARTIFACT_PACKAGE_NAME="$(jq -r '.packageName // ""' "$MANIFEST_FILE")"
           ARTIFACT_TARBALL_NAME="$(jq -r '.tarballName // ""' "$MANIFEST_FILE")"
           ARTIFACT_TARBALL_SHA256="$(jq -r '.tarballSha256 // ""' "$MANIFEST_FILE")"
           if [[ -z "$ARTIFACT_TARBALL_NAME" || "$ARTIFACT_TARBALL_NAME" != "$(basename -- "$ARTIFACT_TARBALL_NAME")" || "$ARTIFACT_TARBALL_NAME" != *.tgz ]]; then
@@ -705,6 +782,10 @@ jobs:
           fi
           if [[ "$ARTIFACT_RELEASE_NPM_DIST_TAG" != "$RELEASE_NPM_DIST_TAG" ]]; then
             echo "Prepared preflight npm dist-tag mismatch: expected $RELEASE_NPM_DIST_TAG, got $ARTIFACT_RELEASE_NPM_DIST_TAG" >&2
+            exit 1
+          fi
+          if [[ "$ARTIFACT_PACKAGE_NAME" != "$NPM_PACKAGE_NAME" ]]; then
+            echo "Prepared preflight npm package mismatch: expected $NPM_PACKAGE_NAME, got $ARTIFACT_PACKAGE_NAME" >&2
             exit 1
           fi
           if [[ ! -f "$ARTIFACT_TARBALL_PATH" ]]; then
@@ -756,7 +837,11 @@ jobs:
       - name: Recheck npm release request
         env:
           BYPASS_STABLE_GUARD: ${{ inputs.bypass_stable_guard }}
+          FORK_CORE_NPM_ONLY: ${{ inputs.fork_core_npm_only }}
+          HISTORICAL_STABLE_TEST: ${{ inputs.historical_stable_test }}
+          NPM_PACKAGE_NAME: ${{ inputs.npm_package_name }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.tag }}
           NPM_WORKFLOW_REF: ${{ github.ref }}
         run: node scripts/openclaw-npm-stable-release.mjs validate-request
@@ -764,12 +849,15 @@ jobs:
       - name: Capture previous stable selector
         id: previous_stable
         if: ${{ inputs.npm_dist_tag == 'stable' }}
+        env:
+          NPM_PACKAGE_NAME: ${{ inputs.npm_package_name }}
         run: node scripts/openclaw-npm-stable-release.mjs capture-selector
 
       - name: Publish
         id: publish
         env:
           BYPASS_STABLE_GUARD: ${{ inputs.bypass_stable_guard }}
+          NPM_PACKAGE_NAME: ${{ inputs.npm_package_name }}
           OPENCLAW_PREPACK_PREPARED: "1"
           OPENCLAW_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag }}
           PUBLISH_TARBALL_PATH: ${{ steps.preflight_provenance.outputs.tarball_path }}
@@ -786,12 +874,14 @@ jobs:
         if: ${{ success() && inputs.npm_dist_tag == 'stable' }}
         env:
           EXPECTED_VERSION: ${{ inputs.tag }}
+          NPM_PACKAGE_NAME: ${{ inputs.npm_package_name }}
         run: node scripts/openclaw-npm-stable-release.mjs verify-readback
 
       - name: Summarize stable npm publication
         if: ${{ always() && inputs.npm_dist_tag == 'stable' }}
         env:
           BYPASS_STABLE_GUARD: ${{ inputs.bypass_stable_guard }}
+          NPM_PACKAGE_NAME: ${{ inputs.npm_package_name }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_SHA: ${{ github.sha }}
           STABLE_BRANCH: ${{ github.ref_name }}
@@ -810,7 +900,7 @@ jobs:
           release_version="${RELEASE_TAG#v}"
           {
             echo "## npm stable publication"
-            echo "- Package: openclaw@${release_version}"
+            echo "- Package: ${NPM_PACKAGE_NAME}@${release_version}"
             echo "- Stable guard bypass: ${BYPASS_STABLE_GUARD}"
             echo "- Stable branch: ${STABLE_BRANCH}"
             echo "- Release tag: ${RELEASE_TAG}"
@@ -819,7 +909,7 @@ jobs:
             echo "- Full Release Validation run: ${FULL_RELEASE_VALIDATION_RUN_ID}"
             echo "- Tarball: ${TARBALL_NAME:-unavailable}"
             echo "- Tarball SHA-256: ${TARBALL_SHA256:-unavailable}"
-            echo "- Previous openclaw@stable: ${PREVIOUS_STABLE:-unavailable}"
+            echo "- Previous ${NPM_PACKAGE_NAME}@stable: ${PREVIOUS_STABLE:-unavailable}"
             echo "- npm publish outcome: ${PUBLISH_OUTCOME}"
             echo "- Exact-version readback: ${EXACT_READBACK:-unavailable}"
             echo "- Stable-selector readback: ${SELECTOR_READBACK:-unavailable}"
@@ -827,7 +917,7 @@ jobs:
             if [[ "$SELECTOR_CAPTURE_OUTCOME" != "success" ]]; then
               echo "- Selector capture failed; npm publish did not run and no repair is required because npm was unchanged."
             else
-              repair_command="$(PREVIOUS_STABLE="$PREVIOUS_STABLE" node scripts/openclaw-npm-stable-release.mjs repair-command)"
+              repair_command="$(NPM_PACKAGE_NAME="$NPM_PACKAGE_NAME" PREVIOUS_STABLE="$PREVIOUS_STABLE" node scripts/openclaw-npm-stable-release.mjs repair-command)"
               echo "- Repair command: \`${repair_command}\`"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
