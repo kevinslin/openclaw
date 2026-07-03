@@ -110,7 +110,7 @@ jobs:
               echo "The canonical repository may not enable fork npm test mode." >&2
               exit 1
             fi
-          elif [[ "${RELEASE_REPOSITORY}" != "kevinslin/openclaw" || "${WORKFLOW_REF}" != "refs/heads/dev/kevinlin/integ-stable-2000-2" || "${NPM_PACKAGE_NAME}" != "@kevins8/openclaw-stable-e2e" || "${FORK_CORE_NPM_ONLY}" != "true" || "${HISTORICAL_STABLE_TEST}" != "true" ]]; then
+          elif [[ "${RELEASE_REPOSITORY}" != "kevinslin/openclaw" || "${WORKFLOW_REF}" != "refs/heads/dev/kevinlin/integ-stable-2000-3" || "${NPM_PACKAGE_NAME}" != "@kevins8/openclaw-stable-e2e" || "${FORK_CORE_NPM_ONLY}" != "true" || "${HISTORICAL_STABLE_TEST}" != "true" ]]; then
             echo "Fork npm test mode requires the fixed repository, branch, package, and boolean inputs." >&2
             exit 1
           fi
@@ -486,7 +486,7 @@ jobs:
           if [[ "${RELEASE_NPM_DIST_TAG}" == "stable" && "${WORKFLOW_REF}" == refs/heads/stable/* ]]; then
             stable_publish=true
           fi
-          if [[ "${RELEASE_NPM_DIST_TAG}" == "stable" && "${HISTORICAL_STABLE_TEST}" == "true" && "${WORKFLOW_REF}" == "refs/heads/dev/kevinlin/integ-stable-2000-2" ]]; then
+          if [[ "${RELEASE_NPM_DIST_TAG}" == "stable" && "${HISTORICAL_STABLE_TEST}" == "true" && "${WORKFLOW_REF}" == "refs/heads/dev/kevinlin/integ-stable-2000-3" ]]; then
             historical_stable_publish=true
           fi
           if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]] && [[ "${tideclaw_alpha_publish}" != "true" ]] && [[ "${stable_publish}" != "true" ]] && [[ "${historical_stable_publish}" != "true" ]]; then
@@ -586,7 +586,7 @@ jobs:
               echo "The canonical repository may not enable fork npm test mode." >&2
               exit 1
             fi
-          elif [[ "${RELEASE_REPOSITORY}" != "kevinslin/openclaw" || "${WORKFLOW_REF}" != "refs/heads/dev/kevinlin/integ-stable-2000-2" || "${NPM_PACKAGE_NAME}" != "@kevins8/openclaw-stable-e2e" || "${FORK_CORE_NPM_ONLY}" != "true" || "${HISTORICAL_STABLE_TEST}" != "true" ]]; then
+          elif [[ "${RELEASE_REPOSITORY}" != "kevinslin/openclaw" || "${WORKFLOW_REF}" != "refs/heads/dev/kevinlin/integ-stable-2000-3" || "${NPM_PACKAGE_NAME}" != "@kevins8/openclaw-stable-e2e" || "${FORK_CORE_NPM_ONLY}" != "true" || "${HISTORICAL_STABLE_TEST}" != "true" ]]; then
             echo "Fork npm test mode requires the fixed repository, branch, package, and boolean inputs." >&2
             exit 1
           fi

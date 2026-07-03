@@ -110,7 +110,7 @@ describe("minimal npm stable workflow", () => {
 
     const raw = readFileSync(workflowPath, "utf8");
     expect(raw).toContain("kevinslin/openclaw");
-    expect(raw).toContain("refs/heads/dev/kevinlin/integ-stable-2000-2");
+    expect(raw).toContain("refs/heads/dev/kevinlin/integ-stable-2000-3");
     expect(raw).toContain("@kevins8/openclaw-stable-e2e");
     expect(raw).toContain("FORK_CORE_NPM_ONLY: ${{ inputs.fork_core_npm_only }}");
     expect(raw).toContain("HISTORICAL_STABLE_TEST: ${{ inputs.historical_stable_test }}");

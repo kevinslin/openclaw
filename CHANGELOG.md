@@ -2,6 +2,18 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2000.3.34
+
+### Testing
+
+- Fork-only maintenance canary for stable npm selector advancement.
+
+## 2000.3.33
+
+### Testing
+
+- Fork-only canary for the initial stable npm selector publication.
+
 ## 2026.7.1
 
 ### Highlights

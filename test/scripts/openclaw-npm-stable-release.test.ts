@@ -19,7 +19,7 @@ const branch = "stable/2026.6.33";
 describe("fork npm test contract", () => {
   const valid = {
     repository: "kevinslin/openclaw",
-    workflowRef: "refs/heads/dev/kevinlin/integ-stable-2000-2",
+    workflowRef: "refs/heads/dev/kevinlin/integ-stable-2000-3",
     packageName: "@kevins8/openclaw-stable-e2e",
     forkCoreNpmOnly: true,
     historicalStableTest: true,
@@ -31,7 +31,7 @@ describe("fork npm test contract", () => {
     expect(validateForkNpmTestContract(valid)).toEqual({
       enabled: true,
       packageName: "@kevins8/openclaw-stable-e2e",
-      stableBranch: "dev/kevinlin/integ-stable-2000-2",
+      stableBranch: "dev/kevinlin/integ-stable-2000-3",
     });
   });
 
@@ -275,15 +275,15 @@ describe("stable npm release request", () => {
         ...valid,
         bypassStableGuard: true,
         historicalStableTest: true,
-        releaseTag: "v2000.2.33",
-        npmWorkflowRef: "refs/heads/dev/kevinlin/integ-stable-2000-2",
-        packageVersion: "2000.2.33",
+        releaseTag: "v2000.3.33",
+        npmWorkflowRef: "refs/heads/dev/kevinlin/integ-stable-2000-3",
+        packageVersion: "2000.3.33",
         mainPackageVersion: "",
       }),
     ).toEqual({
       stable: true,
-      releaseVersion: "2000.2.33",
-      stableBranch: "dev/kevinlin/integ-stable-2000-2",
+      releaseVersion: "2000.3.33",
+      stableBranch: "dev/kevinlin/integ-stable-2000-3",
       bypassStableGuard: true,
       historicalStableTest: true,
     });
@@ -436,14 +436,14 @@ describe("stable registry readback", () => {
   });
 
   it("queries the fixed fork package when supplied", async () => {
-    const query = vi.fn(async () => ({ status: 0, stdout: "2000.2.33\n" }));
+    const query = vi.fn(async () => ({ status: 0, stdout: "2000.3.33\n" }));
     await verifyStableRegistryReadback({
-      expectedVersion: "2000.2.33",
+      expectedVersion: "2000.3.33",
       packageName: "@kevins8/openclaw-stable-e2e",
       query,
       sleep: vi.fn(async () => {}),
     });
-    expect(query).toHaveBeenNthCalledWith(1, "@kevins8/openclaw-stable-e2e@2000.2.33");
+    expect(query).toHaveBeenNthCalledWith(1, "@kevins8/openclaw-stable-e2e@2000.3.33");
     expect(query).toHaveBeenNthCalledWith(2, "@kevins8/openclaw-stable-e2e@stable");
   });
 });

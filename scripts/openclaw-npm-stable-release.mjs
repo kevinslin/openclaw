@@ -7,7 +7,7 @@ import { parseReleaseVersion } from "./lib/npm-publish-plan.mjs";
 
 const SUPPORTED_DIST_TAGS = new Set(["alpha", "beta", "latest", "stable"]);
 const FORK_TEST_REPOSITORY = "kevinslin/openclaw";
-const FORK_TEST_BRANCH = "dev/kevinlin/integ-stable-2000-2";
+const FORK_TEST_BRANCH = "dev/kevinlin/integ-stable-2000-3";
 const FORK_TEST_PACKAGE = "@kevins8/openclaw-stable-e2e";
 
 function parseRequiredBoolean(value, name) {
