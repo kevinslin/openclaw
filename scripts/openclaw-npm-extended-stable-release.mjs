@@ -6,6 +6,19 @@ import { pathToFileURL } from "node:url";
 import { parseReleaseVersion } from "./lib/npm-publish-plan.mjs";
 
 const SUPPORTED_DIST_TAGS = new Set(["alpha", "beta", "latest", "extended-stable"]);
+const FORK_TEST_REPOSITORY = "kevinslin/openclaw";
+const FORK_TEST_BRANCH = "dev/kevinlin/integ-extended-stable-2000-4";
+const FORK_TEST_PACKAGE = "@kevins8/openclaw";
+
+function parseRequiredBoolean(value, name) {
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false" || value === "") {
+    return false;
+  }
+  throw new Error(`${name} must be "true" or "false"; got "${value}".`);
+}
 
 export function parseExtendedStableGuardBypass(value = "") {
   if (value === "" || value === "false") {
@@ -15,6 +28,39 @@ export function parseExtendedStableGuardBypass(value = "") {
     return true;
   }
   throw new Error(`BYPASS_EXTENDED_STABLE_GUARD must be "true" or "false"; got "${value}".`);
+}
+
+export function validateForkNpmTestContract({
+  repository,
+  workflowRef,
+  packageName,
+  forkCoreNpmOnly,
+  historicalExtendedStableTest,
+  bypassExtendedStableGuard,
+  npmDistTag,
+}) {
+  const forkRequested =
+    repository !== "openclaw/openclaw" ||
+    packageName !== "openclaw" ||
+    forkCoreNpmOnly ||
+    historicalExtendedStableTest;
+  if (!forkRequested) {
+    return { enabled: false, packageName: "openclaw" };
+  }
+  if (
+    repository !== FORK_TEST_REPOSITORY ||
+    workflowRef !== `refs/heads/${FORK_TEST_BRANCH}` ||
+    packageName !== FORK_TEST_PACKAGE ||
+    !forkCoreNpmOnly ||
+    !historicalExtendedStableTest ||
+    !bypassExtendedStableGuard ||
+    npmDistTag !== "extended-stable"
+  ) {
+    throw new Error(
+      "Fork npm test mode requires the fixed repository, branch, package, extended-stable dist-tag, and boolean inputs.",
+    );
+  }
+  return { enabled: true, packageName, extendedStableBranch: FORK_TEST_BRANCH };
 }
 
 function requireExtendedStableBypassTag(npmDistTag, bypassExtendedStableGuard) {
@@ -71,6 +117,7 @@ export function validateNpmPublishBoundary(
 
 export function validateExtendedStableNpmReleaseRequest(request) {
   const bypassExtendedStableGuard = request.bypassExtendedStableGuard ?? false;
+  const historicalExtendedStableTest = request.historicalExtendedStableTest ?? false;
   requireExtendedStableBypassTag(request.npmDistTag, bypassExtendedStableGuard);
   const taggedVersion = request.releaseTag.startsWith("v")
     ? parseReleaseVersion(request.releaseTag.slice(1))
@@ -101,7 +148,9 @@ export function validateExtendedStableNpmReleaseRequest(request) {
   });
 
   const releaseVersion = taggedVersion.version;
-  const extendedStableBranch = `extended-stable/${taggedVersion.year}.${taggedVersion.month}.33`;
+  const extendedStableBranch = historicalExtendedStableTest
+    ? FORK_TEST_BRANCH
+    : `extended-stable/${taggedVersion.year}.${taggedVersion.month}.33`;
   const expectedWorkflowRef = `refs/heads/${extendedStableBranch}`;
   if (request.npmWorkflowRef !== expectedWorkflowRef) {
     throw new Error(
@@ -130,6 +179,7 @@ export function validateExtendedStableNpmReleaseRequest(request) {
       releaseVersion,
       extendedStableBranch,
       bypassExtendedStableGuard: true,
+      ...(historicalExtendedStableTest ? { historicalExtendedStableTest: true } : {}),
     };
   }
 
@@ -243,6 +293,7 @@ export function capturePriorExtendedStableSelector({ query }) {
 
 export async function verifyExtendedStableRegistryReadback({
   expectedVersion,
+  packageName = "openclaw",
   query,
   sleep,
   attempts = 12,
@@ -251,8 +302,8 @@ export async function verifyExtendedStableRegistryReadback({
   let exactVersion = "missing";
   let extendedStableSelector = "missing";
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const exactResult = await query(`openclaw@${expectedVersion}`);
-    const extendedStableResult = await query("openclaw@extended-stable");
+    const exactResult = await query(`${packageName}@${expectedVersion}`);
+    const extendedStableResult = await query(`${packageName}@extended-stable`);
     exactVersion = exactResult.status === 0 ? exactResult.stdout.trim() : "missing";
     extendedStableSelector =
       extendedStableResult.status === 0 ? extendedStableResult.stdout.trim() : "missing";
@@ -264,14 +315,14 @@ export async function verifyExtendedStableRegistryReadback({
     }
   }
   throw new Error(
-    `npm registry did not converge to openclaw@${expectedVersion} and openclaw@extended-stable=${expectedVersion} after ${attempts} attempts (exact=${exactVersion}, extended-stable=${extendedStableSelector}).`,
+    `npm registry did not converge to ${packageName}@${expectedVersion} and ${packageName}@extended-stable=${expectedVersion} after ${attempts} attempts (exact=${exactVersion}, extended-stable=${extendedStableSelector}).`,
   );
 }
 
-export function extendedStableSelectorRepairCommand(previous) {
+export function extendedStableSelectorRepairCommand(previous, packageName = "openclaw") {
   return previous === "absent"
-    ? "npm dist-tag rm openclaw extended-stable"
-    : `npm dist-tag add openclaw@${previous} extended-stable`;
+    ? `npm dist-tag rm ${packageName} extended-stable`
+    : `npm dist-tag add ${packageName}@${previous} extended-stable`;
 }
 
 function git(args) {
@@ -289,12 +340,30 @@ function validateRequestFromRepository() {
   const bypassExtendedStableGuard = parseExtendedStableGuardBypass(
     process.env.BYPASS_EXTENDED_STABLE_GUARD ?? "",
   );
+  const forkCoreNpmOnly = parseRequiredBoolean(
+    process.env.FORK_CORE_NPM_ONLY ?? "",
+    "FORK_CORE_NPM_ONLY",
+  );
+  const historicalExtendedStableTest = parseRequiredBoolean(
+    process.env.HISTORICAL_EXTENDED_STABLE_TEST ?? "",
+    "HISTORICAL_EXTENDED_STABLE_TEST",
+  );
+  const forkContract = validateForkNpmTestContract({
+    repository: process.env.RELEASE_REPOSITORY ?? "openclaw/openclaw",
+    workflowRef: npmWorkflowRef,
+    packageName: process.env.NPM_PACKAGE_NAME ?? "openclaw",
+    forkCoreNpmOnly,
+    historicalExtendedStableTest,
+    bypassExtendedStableGuard,
+    npmDistTag,
+  });
   if (npmDistTag !== "extended-stable") {
     return validateExtendedStableNpmReleaseRequest({
       bypassExtendedStableGuard,
       npmDistTag,
       releaseTag,
       npmWorkflowRef,
+      historicalExtendedStableTest: forkContract.enabled,
       checkoutSha: "",
       tagSha: "",
       extendedStableBranchSha: "",
@@ -310,6 +379,7 @@ function validateRequestFromRepository() {
       bypassExtendedStableGuard,
       releaseTag,
       npmWorkflowRef,
+      historicalExtendedStableTest: forkContract.enabled,
       checkoutSha: "",
       tagSha: "",
       extendedStableBranchSha: "",
@@ -317,7 +387,9 @@ function validateRequestFromRepository() {
       mainPackageVersion: "",
     });
   }
-  const extendedStableBranch = `extended-stable/${parsed.year}.${parsed.month}.33`;
+  const extendedStableBranch = forkContract.enabled
+    ? FORK_TEST_BRANCH
+    : `extended-stable/${parsed.year}.${parsed.month}.33`;
   if (bypassExtendedStableGuard) {
     execFileSync(
       "git",
@@ -339,6 +411,7 @@ function validateRequestFromRepository() {
       bypassExtendedStableGuard,
       releaseTag,
       npmWorkflowRef,
+      historicalExtendedStableTest: forkContract.enabled,
       checkoutSha: git(["rev-parse", "HEAD"]),
       tagSha: git(["rev-parse", `${releaseTag}^{commit}`]),
       extendedStableBranchSha: git([
@@ -370,6 +443,7 @@ function validateRequestFromRepository() {
     bypassExtendedStableGuard,
     releaseTag,
     npmWorkflowRef,
+    historicalExtendedStableTest: forkContract.enabled,
     checkoutSha: git(["rev-parse", "HEAD"]),
     tagSha: git(["rev-parse", `${releaseTag}^{commit}`]),
     extendedStableBranchSha: git([
@@ -440,9 +514,10 @@ async function main() {
     return;
   }
   if (command === "capture-selector") {
+    const packageName = process.env.NPM_PACKAGE_NAME ?? "openclaw";
     const previous = capturePriorExtendedStableSelector({
       query: () =>
-        spawnSync("npm", ["view", "openclaw", "dist-tags", "--json"], { encoding: "utf8" }),
+        spawnSync("npm", ["view", packageName, "dist-tags", "--json"], { encoding: "utf8" }),
     });
     appendOutput({ previous });
     return;
@@ -451,6 +526,7 @@ async function main() {
     const expectedVersion = (process.env.EXPECTED_VERSION ?? "").replace(/^v/u, "");
     const result = await verifyExtendedStableRegistryReadback({
       expectedVersion,
+      packageName: process.env.NPM_PACKAGE_NAME ?? "openclaw",
       query: (target) => spawnSync("npm", ["view", target, "version"], { encoding: "utf8" }),
       sleep: (delayMs) =>
         new Promise((resolve) => {
@@ -465,7 +541,10 @@ async function main() {
   }
   if (command === "repair-command") {
     console.log(
-      extendedStableSelectorRepairCommand(process.env.PREVIOUS_EXTENDED_STABLE),
+      extendedStableSelectorRepairCommand(
+        process.env.PREVIOUS_EXTENDED_STABLE,
+        process.env.NPM_PACKAGE_NAME ?? "openclaw",
+      ),
     );
     return;
   }

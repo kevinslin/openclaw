@@ -19,6 +19,14 @@ describe("parseOpenClawNpmPrepublishVerifyArgs", () => {
       help: false,
       tarballPath: "openclaw.tgz",
     });
+    expect(
+      parseOpenClawNpmPrepublishVerifyArgs(["openclaw.tgz", "2026.7.1-beta.1", "@kevins8/hello"]),
+    ).toEqual({
+      expectedPackageName: "@kevins8/hello",
+      expectedVersion: "2026.7.1-beta.1",
+      help: false,
+      tarballPath: "openclaw.tgz",
+    });
   });
 
   it("rejects missing, option-like, and extra arguments before installing", () => {
@@ -32,7 +40,12 @@ describe("parseOpenClawNpmPrepublishVerifyArgs", () => {
       "Unknown openclaw npm prepublish verifier option: --tag",
     );
     expect(() =>
-      parseOpenClawNpmPrepublishVerifyArgs(["openclaw.tgz", "2026.3.23", "extra"]),
+      parseOpenClawNpmPrepublishVerifyArgs([
+        "openclaw.tgz",
+        "2026.3.23",
+        "@kevins8/hello",
+        "extra",
+      ]),
     ).toThrow("Unexpected openclaw npm prepublish verifier argument: extra");
   });
 });

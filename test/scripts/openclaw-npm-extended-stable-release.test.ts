@@ -6,6 +6,7 @@ import {
   parseExtendedStableGuardBypass,
   parsePriorExtendedStableSelector,
   validateFullReleaseValidationManifest,
+  validateForkNpmTestContract,
   validateNpmPublishBoundary,
   validateExtendedStableNpmReleaseRequest,
   validateExtendedStableRunIdentity,
@@ -14,6 +15,54 @@ import {
 
 const sha = "a".repeat(40);
 const branch = "extended-stable/2026.6.33";
+
+describe("fork npm test contract", () => {
+  const valid = {
+    repository: "kevinslin/openclaw",
+    workflowRef: "refs/heads/dev/kevinlin/integ-extended-stable-2000-4",
+    packageName: "@kevins8/openclaw",
+    forkCoreNpmOnly: true,
+    historicalExtendedStableTest: true,
+    bypassExtendedStableGuard: true,
+    npmDistTag: "extended-stable",
+  };
+
+  it("accepts only the fixed fork canary identity", () => {
+    expect(validateForkNpmTestContract(valid)).toEqual({
+      enabled: true,
+      packageName: "@kevins8/openclaw",
+      extendedStableBranch: "dev/kevinlin/integ-extended-stable-2000-4",
+    });
+  });
+
+  it.each([
+    ["repository", { repository: "openclaw/openclaw" }],
+    ["branch", { workflowRef: "refs/heads/main" }],
+    ["package", { packageName: "@kevins8/other" }],
+    ["fork flag", { forkCoreNpmOnly: false }],
+    ["historical flag", { historicalExtendedStableTest: false }],
+    ["bypass", { bypassExtendedStableGuard: false }],
+    ["dist-tag", { npmDistTag: "beta" }],
+  ])("rejects a mismatched %s", (_label, changes) => {
+    expect(() => validateForkNpmTestContract({ ...valid, ...changes })).toThrow(
+      /fixed repository, branch, package/u,
+    );
+  });
+
+  it("preserves the canonical upstream defaults", () => {
+    expect(
+      validateForkNpmTestContract({
+        repository: "openclaw/openclaw",
+        workflowRef: "refs/heads/main",
+        packageName: "openclaw",
+        forkCoreNpmOnly: false,
+        historicalExtendedStableTest: false,
+        bypassExtendedStableGuard: false,
+        npmDistTag: "latest",
+      }),
+    ).toEqual({ enabled: false, packageName: "openclaw" });
+  });
+});
 
 describe("npm extended-stable publication boundary", () => {
   it("parses only explicit boolean extended-stable guard values", () => {
@@ -240,6 +289,26 @@ describe("extended-stable npm release request", () => {
     ).toThrow(/branch tip SHAs must match/u);
   });
 
+  it("allows the fixed historical fork branch while preserving exact SHA identity", () => {
+    expect(
+      validateExtendedStableNpmReleaseRequest({
+        ...valid,
+        bypassExtendedStableGuard: true,
+        historicalExtendedStableTest: true,
+        releaseTag: "v2000.4.33",
+        npmWorkflowRef: "refs/heads/dev/kevinlin/integ-extended-stable-2000-4",
+        packageVersion: "2000.4.33",
+        mainPackageVersion: "",
+      }),
+    ).toEqual({
+      extendedStable: true,
+      releaseVersion: "2000.4.33",
+      extendedStableBranch: "dev/kevinlin/integ-extended-stable-2000-4",
+      bypassExtendedStableGuard: true,
+      historicalExtendedStableTest: true,
+    });
+  });
+
   it("rejects bypass on a regular npm release request", () => {
     expect(() =>
       validateExtendedStableNpmReleaseRequest({
@@ -387,6 +456,18 @@ describe("extended-stable registry readback", () => {
     expect(sleep).toHaveBeenCalledTimes(11);
     expect(sleep.mock.calls.every(([delay]) => delay === 10_000)).toBe(true);
   });
+
+  it("queries the fixed fork package when supplied", async () => {
+    const query = vi.fn(async () => ({ status: 0, stdout: "2000.4.33\n" }));
+    await verifyExtendedStableRegistryReadback({
+      expectedVersion: "2000.4.33",
+      packageName: "@kevins8/openclaw",
+      query,
+      sleep: vi.fn(async () => {}),
+    });
+    expect(query).toHaveBeenNthCalledWith(1, "@kevins8/openclaw@2000.4.33");
+    expect(query).toHaveBeenNthCalledWith(2, "@kevins8/openclaw@extended-stable");
+  });
 });
 
 describe("extended-stable selector repair", () => {
@@ -396,6 +477,9 @@ describe("extended-stable selector repair", () => {
     );
     expect(extendedStableSelectorRepairCommand("absent")).toBe(
       "npm dist-tag rm openclaw extended-stable",
+    );
+    expect(extendedStableSelectorRepairCommand("absent", "@kevins8/openclaw")).toBe(
+      "npm dist-tag rm @kevins8/openclaw extended-stable",
     );
   });
 });

@@ -11,6 +11,9 @@ type Workflow = {
     workflow_dispatch?: {
       inputs?: {
         bypass_extended_stable_guard?: { default?: boolean; type?: string };
+        fork_core_npm_only?: { default?: boolean; type?: string };
+        historical_extended_stable_test?: { default?: boolean; type?: string };
+        npm_package_name?: { default?: string; type?: string };
         npm_dist_tag?: { options?: string[] };
       };
     };
@@ -107,6 +110,27 @@ describe("minimal npm extended-stable workflow", () => {
     expect(summary.run).toContain(
       "Extended-stable guard bypass: ${BYPASS_EXTENDED_STABLE_GUARD}",
     );
+  });
+
+  it("closes the historical fork inputs to the fixed test identity", () => {
+    const parsed = workflow();
+    const inputs = parsed.on?.workflow_dispatch?.inputs;
+    expect(inputs?.fork_core_npm_only).toMatchObject({ default: false, type: "boolean" });
+    expect(inputs?.historical_extended_stable_test).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
+    expect(inputs?.npm_package_name).toMatchObject({ default: "openclaw", type: "string" });
+
+    const raw = readFileSync(workflowPath, "utf8");
+    expect(raw).toContain("kevinslin/openclaw");
+    expect(raw).toContain("refs/heads/dev/kevinlin/integ-extended-stable-2000-4");
+    expect(raw).toContain("@kevins8/openclaw");
+    expect(raw).toContain("FORK_CORE_NPM_ONLY: ${{ inputs.fork_core_npm_only }}");
+    expect(raw).toContain(
+      "HISTORICAL_EXTENDED_STABLE_TEST: ${{ inputs.historical_extended_stable_test }}",
+    );
+    expect(raw).toContain("NPM_PACKAGE_NAME: ${{ inputs.npm_package_name }}");
   });
 
   it("authenticates exact extended-stable run and Full Validation identities", () => {
