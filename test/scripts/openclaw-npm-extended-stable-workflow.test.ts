@@ -131,6 +131,9 @@ describe("minimal npm extended-stable workflow", () => {
       "HISTORICAL_EXTENDED_STABLE_TEST: ${{ inputs.historical_extended_stable_test }}",
     );
     expect(raw).toContain("NPM_PACKAGE_NAME: ${{ inputs.npm_package_name }}");
+    expect(step(parsed.jobs?.preflight_openclaw_npm, "Verify release contents").if).toBe(
+      "${{ !inputs.fork_core_npm_only }}",
+    );
   });
 
   it("authenticates exact extended-stable run and Full Validation identities", () => {

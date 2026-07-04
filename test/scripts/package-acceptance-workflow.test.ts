@@ -1943,6 +1943,7 @@ describe("package artifact reuse", () => {
     );
     expect(npmWorkflow).toContain("Retarget fork npm package");
     expect(npmWorkflow).toContain("retarget-openclaw-npm-package.mjs");
+    expect(npmWorkflow).toContain("if: ${{ !inputs.fork_core_npm_only }}\n        run: pnpm release:check");
     expect(npmWorkflow).toContain(
       "github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-latest'",
     );
