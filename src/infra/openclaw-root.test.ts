@@ -171,6 +171,14 @@ describe("resolveOpenClawPackageRoot", () => {
       },
     },
     {
+      name: "recognizes the fixed fork canary package identity",
+      setup: () => {
+        const pkgRoot = fx("fork-canary");
+        setPackageRoot(pkgRoot, "@kevins8/openclaw");
+        return { opts: { cwd: pkgRoot }, expected: pkgRoot };
+      },
+    },
+    {
       name: "falls through from a non-openclaw moduleUrl candidate to cwd",
       setup: () => {
         const wrongPkgRoot = fx("moduleurl-fallthrough", "wrong");

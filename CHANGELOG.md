@@ -2,6 +2,10 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2000.4.33
+
+- Fork-only integration canary for the npm `extended-stable` release path.
+
 ## 2026.7.1
 
 ### Highlights
