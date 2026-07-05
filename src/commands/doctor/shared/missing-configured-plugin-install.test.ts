@@ -530,6 +530,54 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.warnings).toStrictEqual([]);
   });
 
+  it("repairs a missing snapshot plugin at monthly .33 without pinning intent", async () => {
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "matrix",
+        pluginId: "matrix",
+        meta: { label: "Matrix" },
+        install: { npmSpec: "@openclaw/plugin-matrix" },
+        trustedSourceLinkedOfficialInstall: true,
+      },
+    ]);
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "matrix",
+      targetDir: "/tmp/openclaw-plugins/matrix",
+      version: "2026.6.33",
+      npmResolution: {
+        name: "@openclaw/plugin-matrix",
+        version: "2026.6.33",
+        resolvedSpec: "@openclaw/plugin-matrix@2026.6.33",
+      },
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        update: { channel: "extended-stable" },
+        channels: { matrix: { enabled: true, homeserver: "https://matrix.example.org" } },
+      },
+      env: {},
+      extendedStableTargetContext: {
+        installedCoreVersion: "2026.6.34",
+        snapshotVersion: "2026.6.33",
+        support: { schemaVersion: 1, plugins: [] },
+        snapshotPackageNames: new Set(["@openclaw/plugin-matrix"]),
+      },
+    });
+
+    expect(mockCallArg(mocks.installPluginFromNpmSpec)).toMatchObject({
+      spec: "@openclaw/plugin-matrix@2026.6.33",
+      expectedPluginId: "matrix",
+    });
+    expect(result.records.matrix).toMatchObject({
+      spec: "@openclaw/plugin-matrix",
+      version: "2026.6.33",
+    });
+  });
+
   it("uses an explicit ClawHub install spec before npm", async () => {
     const reviewNotice =
       "╭─ REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check ─╮\n" +
@@ -3874,6 +3922,83 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.changes).toEqual([
       `Installed missing configured plugin "slack" from ${expectedNpmInstallSpec("@openclaw/slack")}.`,
     ]);
+  });
+
+  it("preserves an exact pin while replacing a broken official plugin", async () => {
+    const extensionsDir = path.join(makeTempDir(), "extensions");
+    const installDir = path.join(extensionsDir, "slack");
+    mocks.resolveDefaultPluginExtensionsDir.mockReturnValue(extensionsDir);
+    fs.mkdirSync(installDir, { recursive: true });
+    fs.writeFileSync(path.join(installDir, "package.json"), JSON.stringify({ name: "slack" }));
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
+      slack: {
+        source: "npm",
+        spec: "@openclaw/slack@2026.6.20",
+        installPath: installDir,
+        resolvedName: "@openclaw/slack",
+      },
+    });
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [],
+      diagnostics: [
+        {
+          level: "error",
+          pluginId: "slack",
+          message: "installed plugin package requires compiled runtime output",
+        },
+      ],
+    });
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "slack",
+        pluginId: "slack",
+        meta: { label: "Slack" },
+        install: { npmSpec: "@openclaw/slack", defaultChoice: "npm" },
+        trustedSourceLinkedOfficialInstall: true,
+      },
+    ]);
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "slack",
+      targetDir: "/tmp/openclaw-npm/node_modules/@openclaw/slack",
+      version: "2026.6.20",
+      npmResolution: {
+        name: "@openclaw/slack",
+        version: "2026.6.20",
+        resolvedSpec: "@openclaw/slack@2026.6.20",
+      },
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        update: { channel: "extended-stable" },
+        channels: { slack: { enabled: true, botToken: "xoxb-test" } },
+      },
+      env: {},
+      extendedStableTargetContext: {
+        installedCoreVersion: "2026.6.34",
+        snapshotVersion: "2026.6.33",
+        support: {
+          schemaVersion: 1,
+          plugins: [
+            {
+              pluginId: "slack",
+              packageName: "@openclaw/slack",
+              packageDir: "extensions/slack",
+              acceptanceProfile: "slack-channel-v1",
+            },
+          ],
+        },
+        snapshotPackageNames: new Set(),
+      },
+    });
+
+    expect(mockCallArg(mocks.installPluginFromNpmSpec)).toMatchObject({
+      spec: "@openclaw/slack@2026.6.20",
+    });
+    expect(result.records.slack?.spec).toBe("@openclaw/slack@2026.6.20");
   });
 
   it("does not delete an arbitrary recorded path when replacing a broken official plugin", async () => {

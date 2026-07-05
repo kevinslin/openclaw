@@ -25,6 +25,7 @@ import {
 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
+import { loadExtendedStablePluginSupport } from "../src/plugins/extended-stable-plugin-support.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
 import { readBoundedResponseText } from "./lib/bounded-response.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
@@ -413,8 +414,23 @@ export function collectInstalledPackageErrors(params: {
   errors.push(...collectInstalledPluginSdkZodArtifactErrors(params.packageRoot));
   errors.push(...collectInstalledPluginSdkDeclarationErrors(params.packageRoot));
   errors.push(...collectInstalledRootDependencyManifestErrors(params.packageRoot));
+  errors.push(...collectInstalledExtendedStableMetadataErrors(params));
 
   return errors;
+}
+
+export function collectInstalledExtendedStableMetadataErrors(params: {
+  expectedVersion: string;
+  packageRoot: string;
+}): string[] {
+  try {
+    loadExtendedStablePluginSupport(params.packageRoot);
+  } catch (error) {
+    return [
+      `installed package extended-stable support metadata is invalid: ${formatErrorMessage(error)}`,
+    ];
+  }
+  return [];
 }
 
 function collectInstalledBundledExtensionIds(packageRoot: string): Set<string> {

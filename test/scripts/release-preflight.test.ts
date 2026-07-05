@@ -1,7 +1,7 @@
+import { spawnSync } from "node:child_process";
 // Release preflight tests keep generated-artifact checks fail-closed for operators.
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
-import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
@@ -122,5 +122,12 @@ describe("scripts/release-preflight.mjs", () => {
     expect(result.stderr).toContain(
       "- npm shrinkwraps: exit 7 (pnpm deps:shrinkwrap:changed:generate)",
     );
+  });
+
+  it("rejects the removed cohort evidence input", () => {
+    const result = runPreflight(["--check", "--cohort-evidence-dir", "/tmp/cohort-evidence"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Unknown release preflight argument: --cohort-evidence-dir");
   });
 });

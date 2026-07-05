@@ -676,6 +676,138 @@ describe("updateNpmInstalledPlugins", () => {
     expect(result.config.plugins?.installs?.acpx?.spec).toBe("@openclaw/acpx@2026.5.2-beta.2");
   });
 
+  it("uses the extended-stable monthly snapshot target without rewriting default intent", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/acpx",
+      version: "2026.6.20",
+    });
+    mockNpmViewMetadata({
+      name: "@openclaw/acpx",
+      version: "2026.6.33",
+      integrity: "sha512-snapshot",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "acpx",
+        targetDir: installPath,
+        version: "2026.6.33",
+        npmResolution: {
+          name: "@openclaw/acpx",
+          version: "2026.6.33",
+          resolvedSpec: "@openclaw/acpx@2026.6.33",
+        },
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "acpx",
+        spec: "@openclaw/acpx@latest",
+        installPath,
+        resolvedName: "@openclaw/acpx",
+        resolvedSpec: "@openclaw/acpx@2026.6.20",
+        resolvedVersion: "2026.6.20",
+      }),
+      pluginIds: ["acpx"],
+      updateChannel: "extended-stable",
+      syncOfficialPluginInstalls: true,
+      disableOnFailure: true,
+      extendedStableTargetContext: {
+        installedCoreVersion: "2026.6.34",
+        snapshotVersion: "2026.6.33",
+        support: { schemaVersion: 1, plugins: [] },
+        snapshotPackageNames: new Set(["@openclaw/acpx"]),
+      },
+    });
+
+    expect(npmInstallCall()?.spec).toBe("@openclaw/acpx@2026.6.33");
+    expect(result.config.plugins?.installs?.acpx?.spec).toBe("@openclaw/acpx@latest");
+    expect(result.outcomes[0]).toMatchObject({
+      pluginId: "acpx",
+      status: "updated",
+      code: "monthly_snapshot_target",
+      nextVersion: "2026.6.33",
+    });
+  });
+
+  it("preserves an exact official pin under extended-stable", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/acpx",
+      version: "2026.6.20",
+    });
+    mockNpmViewMetadata({ name: "@openclaw/acpx", version: "2026.6.20" });
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "acpx",
+        spec: "@openclaw/acpx@2026.6.20",
+        installPath,
+        resolvedName: "@openclaw/acpx",
+        resolvedSpec: "@openclaw/acpx@2026.6.20",
+        resolvedVersion: "2026.6.20",
+      }),
+      pluginIds: ["acpx"],
+      updateChannel: "extended-stable",
+      syncOfficialPluginInstalls: true,
+      disableOnFailure: true,
+      extendedStableTargetContext: {
+        installedCoreVersion: "2026.6.34",
+        snapshotVersion: "2026.6.33",
+        support: { schemaVersion: 1, plugins: [] },
+        snapshotPackageNames: new Set(["@openclaw/acpx"]),
+      },
+    });
+
+    expect(npmInstallCall()).toBeUndefined();
+    expect(result.config.plugins?.installs?.acpx?.spec).toBe("@openclaw/acpx@2026.6.20");
+    expect(result.outcomes[0]).toMatchObject({
+      status: "unchanged",
+      code: "user_pin_preserved",
+    });
+  });
+
+  it("reports an unavailable snapshot package without falling back to latest", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/acpx",
+      version: "2026.6.20",
+    });
+    mockNpmViewMetadata({ name: "@openclaw/acpx", version: "2026.6.33" });
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: false,
+      error: "package unavailable",
+      code: "NPM_PACKAGE_NOT_FOUND",
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "acpx",
+        spec: "@openclaw/acpx",
+        installPath,
+        resolvedName: "@openclaw/acpx",
+        resolvedSpec: "@openclaw/acpx@2026.6.20",
+        resolvedVersion: "2026.6.20",
+      }),
+      pluginIds: ["acpx"],
+      updateChannel: "extended-stable",
+      syncOfficialPluginInstalls: true,
+      disableOnFailure: true,
+      extendedStableTargetContext: {
+        installedCoreVersion: "2026.6.34",
+        snapshotVersion: "2026.6.33",
+        support: { schemaVersion: 1, plugins: [] },
+        snapshotPackageNames: new Set(["@openclaw/acpx"]),
+      },
+    });
+
+    expect(npmInstallCall()?.spec).toBe("@openclaw/acpx@2026.6.33");
+    expect(result.outcomes[0]).toMatchObject({
+      status: "error",
+      code: "snapshot_package_unavailable",
+    });
+    expect(result.config.plugins?.entries?.acpx?.enabled).not.toBe(false);
+    expect(result.config.plugins?.installs?.acpx?.spec).toBe("@openclaw/acpx");
+  });
+
   it("pins unchanged official npm records during official sync", async () => {
     const installPath = createInstalledPackageDir({
       name: "@openclaw/acpx",
@@ -2237,6 +2369,145 @@ describe("updateNpmInstalledPlugins", () => {
       currentVersion: "2026.5.3",
       nextVersion: "2026.5.4",
     });
+  });
+
+  it("preserves disabled official installs under extended-stable", async () => {
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          entries: { codex: { enabled: false } },
+          installs: {
+            codex: {
+              source: "npm",
+              spec: "@openclaw/codex",
+              installPath: "/tmp/codex",
+              resolvedName: "@openclaw/codex",
+            },
+          },
+        },
+      },
+      pluginIds: ["codex"],
+      skipDisabledPlugins: true,
+      syncOfficialPluginInstalls: true,
+      updateChannel: "extended-stable",
+      extendedStableTargetContext: {
+        installedCoreVersion: "2026.6.34",
+        snapshotVersion: "2026.6.33",
+        support: {
+          schemaVersion: 1,
+          plugins: [
+            {
+              pluginId: "codex",
+              packageName: "@openclaw/codex",
+              packageDir: "extensions/codex",
+              acceptanceProfile: "codex-provider-v1",
+            },
+          ],
+        },
+        snapshotPackageNames: new Set(),
+      },
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "codex",
+        status: "skipped",
+        code: "disabled",
+        message: 'Skipping "codex" (disabled in config).',
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      name: "third-party npm",
+      config: createNpmInstallConfig({
+        pluginId: "demo",
+        spec: "@acme/demo@latest",
+        installPath: "/tmp/demo",
+        resolvedName: "@acme/demo",
+      }),
+    },
+    {
+      name: "ClawHub",
+      config: createClawHubInstallConfig({
+        pluginId: "demo",
+        installPath: "/tmp/demo",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "demo",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
+      }),
+    },
+    {
+      name: "marketplace",
+      config: createMarketplaceInstallConfig({
+        pluginId: "demo",
+        installPath: "/tmp/demo",
+        marketplaceSource: "acme/plugins",
+        marketplacePlugin: "demo",
+      }),
+    },
+    {
+      name: "Git",
+      config: createGitInstallConfig({
+        pluginId: "demo",
+        spec: "git:github.com/acme/demo@main",
+        installPath: "/tmp/demo",
+      }),
+    },
+    {
+      name: "local path",
+      config: {
+        plugins: {
+          installs: {
+            demo: {
+              source: "path" as const,
+              sourcePath: "/src/demo",
+              installPath: "/tmp/demo",
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "local archive",
+      config: {
+        plugins: {
+          installs: {
+            demo: {
+              source: "archive" as const,
+              sourcePath: "/src/demo.tgz",
+              installPath: "/tmp/demo",
+            },
+          },
+        },
+      },
+    },
+  ])("preserves $name installs under extended-stable", async ({ config }) => {
+    const result = await updateNpmInstalledPlugins({
+      config,
+      pluginIds: ["demo"],
+      syncOfficialPluginInstalls: true,
+      updateChannel: "extended-stable",
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
+    expect(installPluginFromMarketplaceMock).not.toHaveBeenCalled();
+    expect(installPluginFromGitSpecMock).not.toHaveBeenCalled();
+    expect(result.config).toBe(config);
+    expect(result.changed).toBe(false);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "demo",
+        status: "skipped",
+        code: "unsupported_install_source",
+        message: 'Skipping "demo" (extended-stable only converges official npm installs).',
+      },
+    ]);
   });
 
   it("preserves exact official npm pins when official install sync is not requested", async () => {

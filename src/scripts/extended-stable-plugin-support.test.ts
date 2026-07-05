@@ -87,7 +87,7 @@ describe("extended-stable plugin support policy", () => {
           { ...validPolicy.plugins[2], packageDir: "../slack" },
         ],
       }),
-    ).toThrow(/packageDir must match pluginId/u);
+    ).toThrow(/packageDir must be a safe relative path ending in pluginId/u);
 
     expect(() =>
       parseExtendedStablePluginSupport({
@@ -98,6 +98,11 @@ describe("extended-stable plugin support policy", () => {
         ],
       }),
     ).toThrow(/acceptanceProfile is not registered/u);
+  });
+
+  it("keeps the checked-in human-owned policy at the approved three-plugin boundary", () => {
+    const support = loadExtendedStablePluginSupport(process.cwd());
+    expect(support).toEqual(validPolicy);
   });
 
   it("rejects package identity and root-version drift", () => {

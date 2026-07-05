@@ -5,6 +5,11 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { assertExtendedStableReleaseVersion } from "./lib/extended-stable-plugin-acceptance.js";
 import { loadExtendedStablePluginSupport } from "./lib/extended-stable-plugin-support.js";
+import {
+  collectExtendedStablePublishablePluginPackages,
+  collectExtendedStableSnapshotPluginPackages,
+  deriveExtendedStablePluginCandidateTag,
+} from "./lib/plugin-npm-release.js";
 
 function record(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -50,6 +55,13 @@ function positiveInteger(value: unknown, label: string): number {
   return parsed;
 }
 
+function packageNames(value: unknown, label: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array.`);
+  }
+  return value.map((entry, index) => text(entry, `${label}[${index}]`));
+}
+
 export function verifySelectorHandoff(value: unknown, rootDir = resolve(".")): void {
   const handoff = record(value, "selector handoff");
   keys(
@@ -62,6 +74,7 @@ export function verifySelectorHandoff(value: unknown, rootDir = resolve(".")): v
       "core",
       "pluginPublication",
       "acceptances",
+      "selectorPackages",
       "selectorsBefore",
       "selectorsAfter",
       "selectorOrder",
@@ -69,8 +82,8 @@ export function verifySelectorHandoff(value: unknown, rootDir = resolve(".")): v
     ],
     "selector handoff",
   );
-  if (handoff.schemaVersion !== 1) {
-    throw new Error("selector handoff schemaVersion must be 1.");
+  if (handoff.schemaVersion !== 2) {
+    throw new Error("selector handoff schemaVersion must be 2.");
   }
   text(handoff.handoffId, "selector handoff.handoffId");
   const releaseVersion = assertExtendedStableReleaseVersion(
@@ -86,6 +99,18 @@ export function verifySelectorHandoff(value: unknown, rootDir = resolve(".")): v
   ) {
     throw new Error("selector handoff must be ready with plugin-first/core-last order.");
   }
+
+  const selectedPackages = collectExtendedStablePublishablePluginPackages(rootDir);
+  if (selectedPackages.some((plugin) => plugin.version !== releaseVersion)) {
+    throw new Error("selector handoff releaseVersion must match the packaged release version.");
+  }
+  const selectedByName = new Map(selectedPackages.map((plugin) => [plugin.packageName, plugin]));
+  const expectedPublicationNames = selectedPackages.map((plugin) => plugin.packageName);
+  const snapshotPackages = collectExtendedStableSnapshotPluginPackages(rootDir);
+  const expectedSnapshotNames = snapshotPackages.map((plugin) => plugin.packageName);
+  const support = loadExtendedStablePluginSupport(rootDir);
+  const expectedAcceptanceNames = support.plugins.map((plugin) => plugin.packageName);
+  const snapshotVersion = `${releaseVersion.split(".").slice(0, 2).join(".")}.33`;
 
   const core = record(handoff.core, "selector handoff.core");
   keys(
@@ -106,8 +131,7 @@ export function verifySelectorHandoff(value: unknown, rootDir = resolve(".")): v
   positiveInteger(core.publicationRunId, "selector handoff.core.publicationRunId");
   positiveInteger(core.publicationRunAttempt, "selector handoff.core.publicationRunAttempt");
   artifactDigest(core.publicationArtifactDigest, "selector handoff.core.publicationArtifactDigest");
-  const coreIntegrity = text(core.npmIntegrity, "selector handoff.core.npmIntegrity");
-  if (!coreIntegrity.startsWith("sha512-")) {
+  if (!text(core.npmIntegrity, "selector handoff.core.npmIntegrity").startsWith("sha512-")) {
     throw new Error("selector handoff core npmIntegrity must be sha512.");
   }
   const [year, month, patch] = releaseVersion.split(".");
@@ -115,8 +139,6 @@ export function verifySelectorHandoff(value: unknown, rootDir = resolve(".")): v
     throw new Error("selector handoff core candidate tag is invalid.");
   }
 
-  const support = loadExtendedStablePluginSupport(rootDir);
-  const expectedPackages = support.plugins.map((plugin) => plugin.packageName);
   const publication = record(handoff.pluginPublication, "selector handoff.pluginPublication");
   keys(
     publication,
@@ -127,10 +149,15 @@ export function verifySelectorHandoff(value: unknown, rootDir = resolve(".")): v
       "publicationArtifactDigest",
       "publicationResultSha256",
       "plugins",
+      "snapshotReadbacks",
     ],
     "selector handoff.pluginPublication",
   );
-  if (publication.sourceSha !== sourceSha || !Array.isArray(publication.plugins)) {
+  if (
+    publication.sourceSha !== sourceSha ||
+    !Array.isArray(publication.plugins) ||
+    !Array.isArray(publication.snapshotReadbacks)
+  ) {
     throw new Error("selector handoff plugin publication identity is invalid.");
   }
   positiveInteger(publication.publicationRunId, "plugin publication run id");
@@ -145,16 +172,13 @@ export function verifySelectorHandoff(value: unknown, rootDir = resolve(".")): v
       ["packageName", "version", "npmIntegrity", "candidateTag"],
       `plugin publication plugins[${index}]`,
     );
-    if (plugin.version !== releaseVersion) {
-      throw new Error(`plugin publication plugins[${index}] has a mismatched version.`);
-    }
     const packageName = text(
       plugin.packageName,
       `plugin publication plugins[${index}].packageName`,
     );
-    const supportEntry = support.plugins.find((candidate) => candidate.packageName === packageName);
-    if (!supportEntry) {
-      throw new Error(`plugin publication plugins[${index}] is not covered.`);
+    const selected = selectedByName.get(packageName);
+    if (!selected || plugin.version !== releaseVersion) {
+      throw new Error(`plugin publication plugins[${index}] is not in the derived release set.`);
     }
     const integrity = text(
       plugin.npmIntegrity,
@@ -163,17 +187,18 @@ export function verifySelectorHandoff(value: unknown, rootDir = resolve(".")): v
     if (!integrity.startsWith("sha512-")) {
       throw new Error(`plugin publication plugins[${index}] npmIntegrity must be sha512.`);
     }
-    if (
-      plugin.candidateTag !==
-      `extended-stable-plugin-candidate-${supportEntry.pluginId}-${year}-${month}-${patch}`
-    ) {
+    const expectedTag = deriveExtendedStablePluginCandidateTag({
+      pluginId: selected.extensionId,
+      version: releaseVersion,
+    });
+    if (plugin.candidateTag !== expectedTag) {
       throw new Error(`plugin publication plugins[${index}] candidate tag is invalid.`);
     }
     publicationIntegrityByPackage.set(packageName, integrity);
     return packageName;
   });
-  if (JSON.stringify(publishedPackages) !== JSON.stringify(expectedPackages)) {
-    throw new Error("selector handoff publication must contain exactly the covered packages.");
+  if (JSON.stringify(publishedPackages) !== JSON.stringify(expectedPublicationNames)) {
+    throw new Error("selector handoff publication must contain the derived package set.");
   }
 
   if (!Array.isArray(handoff.acceptances)) {
@@ -198,8 +223,9 @@ export function verifySelectorHandoff(value: unknown, rootDir = resolve(".")): v
     artifactDigest(acceptance.acceptanceArtifactDigest, `acceptances[${index}] artifact digest`);
     positiveInteger(acceptance.acceptanceRunId, `acceptances[${index}] run id`);
     positiveInteger(acceptance.acceptanceRunAttempt, `acceptances[${index}] run attempt`);
-    const workflowSha = text(acceptance.workflowSha, `acceptances[${index}] workflow SHA`);
-    if (!/^[0-9a-f]{40}$/u.test(workflowSha)) {
+    if (
+      !/^[0-9a-f]{40}$/u.test(text(acceptance.workflowSha, `acceptances[${index}] workflow SHA`))
+    ) {
       throw new Error(`acceptances[${index}] workflow SHA must be full lowercase hex.`);
     }
     const packageName = text(acceptance.packageName, `acceptances[${index}].packageName`);
@@ -208,15 +234,65 @@ export function verifySelectorHandoff(value: unknown, rootDir = resolve(".")): v
     }
     return packageName;
   });
-  if (JSON.stringify(acceptedPackages) !== JSON.stringify(expectedPackages)) {
+  if (JSON.stringify(acceptedPackages) !== JSON.stringify(expectedAcceptanceNames)) {
     throw new Error("selector handoff acceptances must contain exactly the covered packages.");
   }
 
+  const aggregateSnapshotIntegrity = new Map<string, string>();
+  const aggregateSnapshotNames = publication.snapshotReadbacks.map((entry, index) => {
+    const snapshot = record(entry, `plugin publication snapshotReadbacks[${index}]`);
+    keys(
+      snapshot,
+      ["packageName", "version", "npmIntegrity"],
+      `plugin publication snapshotReadbacks[${index}]`,
+    );
+    const packageName = text(
+      snapshot.packageName,
+      `plugin snapshotReadbacks[${index}].packageName`,
+    );
+    if (snapshot.version !== snapshotVersion) {
+      throw new Error(`plugin snapshotReadbacks[${index}] version is invalid.`);
+    }
+    const integrity = text(
+      snapshot.npmIntegrity,
+      `plugin snapshotReadbacks[${index}].npmIntegrity`,
+    );
+    if (!integrity.startsWith("sha512-")) {
+      throw new Error(`plugin snapshotReadbacks[${index}] npmIntegrity must be sha512.`);
+    }
+    aggregateSnapshotIntegrity.set(packageName, integrity);
+    return packageName;
+  });
+  if (JSON.stringify(aggregateSnapshotNames) !== JSON.stringify(expectedSnapshotNames)) {
+    throw new Error("aggregate publication proof must contain exactly snapshot-only packages.");
+  }
+  if (releaseVersion === snapshotVersion) {
+    for (const packageName of expectedSnapshotNames) {
+      if (
+        aggregateSnapshotIntegrity.get(packageName) !==
+        publicationIntegrityByPackage.get(packageName)
+      ) {
+        throw new Error(
+          `${packageName} snapshot integrity must match its patch 33 publication integrity.`,
+        );
+      }
+    }
+  }
+
+  const selectorPackages = packageNames(
+    handoff.selectorPackages,
+    "selector handoff.selectorPackages",
+  );
+  if (JSON.stringify(selectorPackages) !== JSON.stringify(expectedPublicationNames)) {
+    throw new Error(
+      "selector handoff selectorPackages must match the patch-derived publication set.",
+    );
+  }
   for (const field of ["selectorsBefore", "selectorsAfter"] as const) {
     const values = record(handoff[field], `selector handoff.${field}`);
-    const expectedSelectorKeys = ["openclaw", ...expectedPackages].toSorted();
+    const expectedSelectorKeys = ["openclaw", ...selectorPackages].toSorted();
     if (JSON.stringify(Object.keys(values).toSorted()) !== JSON.stringify(expectedSelectorKeys)) {
-      throw new Error(`selector handoff.${field} must contain only core and covered plugins.`);
+      throw new Error(`selector handoff.${field} must contain only core and selector packages.`);
     }
     for (const [packageName, packageValue] of Object.entries(values)) {
       const selectors = record(packageValue, `selector handoff.${field}.${packageName}`);
@@ -233,14 +309,10 @@ export function verifySelectorHandoff(value: unknown, rootDir = resolve(".")): v
   }
 }
 
-function isMain(): boolean {
-  return (
-    process.argv[1] !== undefined &&
-    import.meta.url === pathToFileURL(resolve(process.argv[1])).href
-  );
-}
-
-if (isMain()) {
+if (
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(resolve(process.argv[1])).href
+) {
   const path = process.argv[2];
   if (!path || process.argv.length !== 3) {
     throw new Error("Usage: verify-extended-stable-selector-handoff.ts <handoff.json>");

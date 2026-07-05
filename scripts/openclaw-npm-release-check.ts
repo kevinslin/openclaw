@@ -10,6 +10,7 @@ import {
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "../src/infra/package-dist-inventory.ts";
+import { EXTENDED_STABLE_PLUGIN_SUPPORT_PATH } from "../src/plugins/extended-stable-plugin-support.ts";
 import {
   compareReleaseVersions as compareReleaseVersionsBase,
   collectReleaseVersionFloorErrors as collectReleaseVersionFloorErrorsBase,
@@ -638,7 +639,17 @@ export function collectControlUiPackErrors(paths: Iterable<string>): string[] {
   return errors;
 }
 
-function collectPackedTarballErrors(): string[] {
+export function collectExtendedStableMetadataPackErrors(
+  paths: Iterable<string>,
+  _packageVersion: string,
+): string[] {
+  const packedPaths = new Set(paths);
+  return [EXTENDED_STABLE_PLUGIN_SUPPORT_PATH]
+    .filter((path) => !packedPaths.has(path))
+    .map((path) => `npm package is missing required extended-stable metadata "${path}".`);
+}
+
+function collectPackedTarballErrors(packageVersion: string): string[] {
   const errors: string[] = [];
   let stdout;
   try {
@@ -672,6 +683,7 @@ function collectPackedTarballErrors(): string[] {
 
   return [
     ...collectControlUiPackErrors(packedPaths),
+    ...collectExtendedStableMetadataPackErrors(packedPaths, packageVersion),
     ...collectForbiddenPackedPathErrors(packedPaths),
     ...collectForbiddenPackedContentErrors(packedPaths),
     ...collectPackedTestCargoErrors(packedPaths),
@@ -767,7 +779,7 @@ async function main(): Promise<number> {
     await writePackageDistInventory(process.cwd());
   }
   const shrinkwrapErrors = skipPackValidation ? [] : collectNpmShrinkwrapErrors();
-  const tarballErrors = skipPackValidation ? [] : collectPackedTarballErrors();
+  const tarballErrors = skipPackValidation ? [] : collectPackedTarballErrors(pkg.version ?? "");
   const errors = [...metadataErrors, ...tagErrors, ...shrinkwrapErrors, ...tarballErrors];
 
   if (errors.length > 0) {

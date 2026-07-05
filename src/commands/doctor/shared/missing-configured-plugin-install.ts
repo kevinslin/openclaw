@@ -19,6 +19,7 @@ import {
   isOpenClawOrgNpmSpec,
   parseRegistryNpmSpec,
 } from "../../../infra/npm-registry-spec.js";
+import { resolveOpenClawPackageRootSync } from "../../../infra/openclaw-root.js";
 import {
   normalizeUpdateChannel,
   resolveRegistryUpdateChannel,
@@ -31,6 +32,10 @@ import {
   installPluginFromClawHub,
   type ClawHubRiskAcknowledgementRequest,
 } from "../../../plugins/clawhub.js";
+import {
+  loadExtendedStablePluginTargetContextFromRoot,
+  type ExtendedStablePluginTargetContext,
+} from "../../../plugins/extended-stable-plugin-target.js";
 import { collectConfiguredMemoryEmbeddingProviderIds } from "../../../plugins/gateway-startup-plugin-ids.js";
 import { collectConfiguredSpeechProviderIds } from "../../../plugins/gateway-startup-speech-providers.js";
 import {
@@ -1045,6 +1050,8 @@ async function installCandidate(params: {
   records: Record<string, PluginInstallRecord>;
   env: NodeJS.ProcessEnv;
   updateChannel?: UpdateChannel;
+  extendedStableTargetContext?: ExtendedStablePluginTargetContext;
+  requestedNpmSpec?: string;
   mode?: "install" | "update";
   preferNpm?: boolean;
   repairReason?: InstallCandidateRepairReason;
@@ -1067,10 +1074,15 @@ async function installCandidate(params: {
         updateChannel: params.updateChannel,
       })
     : null;
-  const npmSpecs = candidate.npmSpec
+  const requestedNpmSpec = params.requestedNpmSpec ?? candidate.npmSpec;
+  const npmSpecs = requestedNpmSpec
     ? resolveNpmInstallSpecsForUpdateChannel({
-        spec: candidate.npmSpec,
+        spec: requestedNpmSpec,
         updateChannel: params.updateChannel,
+        officialPackageName: candidate.trustedSourceLinkedOfficialInstall
+          ? parseRegistryNpmSpec(candidate.npmSpec ?? requestedNpmSpec)?.name
+          : undefined,
+        extendedStableTargetContext: params.extendedStableTargetContext,
       })
     : null;
   const clawhubInstallSpec = clawhubSpecs?.installSpec ?? candidate.clawhubSpec;
@@ -1100,6 +1112,7 @@ async function installCandidate(params: {
       records: params.records,
       npmInstallSpec,
       npmRecordSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
+      preserveRecordSpec: Boolean(npmSpecs?.targetCode),
       packagePath: existingNpmPackagePath,
       version: existingNpmPackageVersion,
     });
@@ -1229,7 +1242,8 @@ async function installCandidate(params: {
         spec: resolveNpmInstallRecordSpec({
           requestedSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
           resolution: result.npmResolution,
-          pinResolvedRegistrySpec: candidate.trustedSourceLinkedOfficialInstall === true,
+          pinResolvedRegistrySpec:
+            candidate.trustedSourceLinkedOfficialInstall === true && !npmSpecs?.targetCode,
         }),
         installPath: result.targetDir,
         version: result.version,
@@ -1310,6 +1324,7 @@ async function adoptExistingNpmPackage(params: {
   npmRecordSpec: string;
   packagePath: string;
   version: string;
+  preserveRecordSpec?: boolean;
 }): Promise<{
   records: Record<string, PluginInstallRecord>;
   changes: string[];
@@ -1332,7 +1347,9 @@ async function adoptExistingNpmPackage(params: {
         spec: resolveNpmInstallRecordSpec({
           requestedSpec: params.npmRecordSpec,
           resolution: npmResolution,
-          pinResolvedRegistrySpec: params.candidate.trustedSourceLinkedOfficialInstall === true,
+          pinResolvedRegistrySpec:
+            params.candidate.trustedSourceLinkedOfficialInstall === true &&
+            !params.preserveRecordSpec,
         }),
         installPath: params.packagePath,
         installedAt: new Date().toISOString(),
@@ -1353,6 +1370,8 @@ async function adoptExistingNpmPackage(params: {
 function resolveCandidateInstallSpec(params: {
   candidate: DownloadableInstallCandidate;
   updateChannel: UpdateChannel;
+  extendedStableTargetContext?: ExtendedStablePluginTargetContext;
+  requestedNpmSpec?: string;
 }): string | undefined {
   if (params.candidate.defaultChoice !== "npm" && params.candidate.clawhubSpec) {
     return resolveClawHubInstallSpecsForUpdateChannel({
@@ -1360,10 +1379,15 @@ function resolveCandidateInstallSpec(params: {
       updateChannel: params.updateChannel,
     }).installSpec;
   }
-  if (params.candidate.npmSpec) {
+  const requestedNpmSpec = params.requestedNpmSpec ?? params.candidate.npmSpec;
+  if (requestedNpmSpec) {
     return resolveNpmInstallSpecsForUpdateChannel({
-      spec: params.candidate.npmSpec,
+      spec: requestedNpmSpec,
       updateChannel: params.updateChannel,
+      officialPackageName: params.candidate.trustedSourceLinkedOfficialInstall
+        ? parseRegistryNpmSpec(params.candidate.npmSpec ?? requestedNpmSpec)?.name
+        : undefined,
+      extendedStableTargetContext: params.extendedStableTargetContext,
     }).installSpec;
   }
   if (params.candidate.clawhubSpec) {
@@ -1373,6 +1397,32 @@ function resolveCandidateInstallSpec(params: {
     }).installSpec;
   }
   return undefined;
+}
+
+function resolveDoctorExtendedStableTargetContext(params: {
+  updateChannel: UpdateChannel;
+  env: NodeJS.ProcessEnv;
+  provided?: ExtendedStablePluginTargetContext;
+}): ExtendedStablePluginTargetContext | undefined {
+  if (params.updateChannel !== "extended-stable") {
+    return undefined;
+  }
+  if (params.provided) {
+    return params.provided;
+  }
+  const rootDir = resolveOpenClawPackageRootSync({
+    cwd: process.cwd(),
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
+  });
+  if (!rootDir) {
+    throw new Error(
+      "Could not resolve the installed OpenClaw package root for extended-stable plugin repair.",
+    );
+  }
+  return loadExtendedStablePluginTargetContextFromRoot({
+    rootDir,
+  });
 }
 
 function resolveRecordInstallPath(
@@ -1410,6 +1460,7 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   baselineRecords?: Record<string, PluginInstallRecord>;
+  extendedStableTargetContext?: ExtendedStablePluginTargetContext;
 }): Promise<ConfiguredPluginInstallHealthIssue[]> {
   const env = params.env ?? process.env;
   const pluginIds = collectConfiguredPluginIds(params.cfg, env);
@@ -1457,6 +1508,11 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
   const updateChannel = resolveRegistryUpdateChannel({
     configChannel: normalizeUpdateChannel(params.cfg.update?.channel),
     currentVersion: VERSION,
+  });
+  const extendedStableTargetContext = resolveDoctorExtendedStableTargetContext({
+    updateChannel,
+    env,
+    provided: params.extendedStableTargetContext,
   });
   const repairablePackageDiagnosticPluginIds =
     collectInstalledPluginIdsWithRepairablePackageDiagnostics({
@@ -1608,7 +1664,13 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
     if (!shouldReplaceBrokenOfficialInstall && hasUsableRecord) {
       continue;
     }
-    const installSpec = resolveCandidateInstallSpec({ candidate, updateChannel });
+    const installSpec = resolveCandidateInstallSpec({
+      candidate,
+      updateChannel,
+      extendedStableTargetContext,
+      requestedNpmSpec:
+        shouldReplaceBrokenOfficialInstall && record?.source === "npm" ? record.spec : undefined,
+    });
     if (shouldReplaceBrokenOfficialInstall) {
       const installPath = resolveRecordInstallPath(record, env);
       if (staleVersionBoundRuntimePluginIds.has(candidate.pluginId)) {
@@ -1799,6 +1861,7 @@ export async function repairMissingConfiguredPluginInstalls(params: {
    * snapshot. The merged result is persisted before this function returns.
    */
   baselineRecords?: Record<string, PluginInstallRecord>;
+  extendedStableTargetContext?: ExtendedStablePluginTargetContext;
 }): Promise<RepairMissingPluginInstallsResult> {
   return repairMissingPluginInstalls({
     cfg: params.cfg,
@@ -1809,6 +1872,9 @@ export async function repairMissingConfiguredPluginInstalls(params: {
     ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
     ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
     ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),
+    ...(params.extendedStableTargetContext
+      ? { extendedStableTargetContext: params.extendedStableTargetContext }
+      : {}),
   });
 }
 
@@ -1820,6 +1886,7 @@ export async function repairMissingPluginInstallsForIds(params: {
   blockedPluginIds?: Iterable<string>;
   env?: NodeJS.ProcessEnv;
   baselineRecords?: Record<string, PluginInstallRecord>;
+  extendedStableTargetContext?: ExtendedStablePluginTargetContext;
   acknowledgeClawHubRisk?: boolean;
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
 }): Promise<RepairMissingPluginInstallsResult> {
@@ -1842,6 +1909,9 @@ export async function repairMissingPluginInstallsForIds(params: {
     ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
     ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
     ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),
+    ...(params.extendedStableTargetContext
+      ? { extendedStableTargetContext: params.extendedStableTargetContext }
+      : {}),
   });
 }
 
@@ -1852,6 +1922,7 @@ async function repairMissingPluginInstalls(params: {
   blockedPluginIds?: ReadonlySet<string>;
   env?: NodeJS.ProcessEnv;
   baselineRecords?: Record<string, PluginInstallRecord>;
+  extendedStableTargetContext?: ExtendedStablePluginTargetContext;
   acknowledgeClawHubRisk?: boolean;
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
 }): Promise<RepairMissingPluginInstallsResult> {
@@ -1899,6 +1970,11 @@ async function repairMissingPluginInstalls(params: {
   const updateChannel = resolveRegistryUpdateChannel({
     configChannel: normalizeUpdateChannel(params.cfg.update?.channel),
     currentVersion: VERSION,
+  });
+  const extendedStableTargetContext = resolveDoctorExtendedStableTargetContext({
+    updateChannel,
+    env,
+    provided: params.extendedStableTargetContext,
   });
   const installedPluginIdsWithRepairablePackageDiagnostics =
     collectInstalledPluginIdsWithRepairablePackageDiagnostics({
@@ -2005,6 +2081,8 @@ async function repairMissingPluginInstalls(params: {
       },
       pluginIds: missingRecordedPluginIds,
       updateChannel,
+      extendedStableTargetContext,
+      syncOfficialPluginInstalls: true,
       logger: {
         terminalLinks: false,
         warn: (message) => {
@@ -2113,6 +2191,9 @@ async function repairMissingPluginInstalls(params: {
       records: nextRecords,
       env,
       updateChannel,
+      extendedStableTargetContext,
+      requestedNpmSpec:
+        shouldReplaceBrokenOfficialInstall && record?.source === "npm" ? record.spec : undefined,
       mode: shouldReplaceBrokenOfficialInstall ? "update" : "install",
       preferNpm: preferNpmInstalls,
       ...(installedPluginIdsWithStaleVersionBoundRuntimePackages.has(candidate.pluginId)
