@@ -46,6 +46,11 @@ on:
         options:
           - default
           - extended-stable
+      fork_plugin_oidc_test:
+        description: Fork-only canary; retarget one plugin to the fixed fork-owned npm package
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: plugin-npm-release-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
@@ -86,6 +91,7 @@ jobs:
 
       - name: Validate ref is on a trusted publish branch
         env:
+          FORK_PLUGIN_OIDC_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.fork_plugin_oidc_test || false }}
           NPM_DIST_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.npm_dist_tag || 'default' }}
           PUBLISH_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_scope || '' }}
           RELEASE_PLUGINS: ${{ github.event_name == 'workflow_dispatch' && inputs.plugins || '' }}
@@ -93,6 +99,32 @@ jobs:
           WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
+          if [[ "${FORK_PLUGIN_OIDC_TEST}" == "true" ]]; then
+            expected_branch="dev/kevinlin/fork-plugin-oidc-test"
+            expected_package="@kevins8/openclaw-plugin-stable-e2e"
+            if [[ "${GITHUB_REPOSITORY}" == "openclaw/openclaw" ]]; then
+              echo "The canonical repository may not enable fork plugin OIDC test mode." >&2
+              exit 1
+            fi
+            if [[ "${GITHUB_REPOSITORY}" != "kevinslin/openclaw" || "${WORKFLOW_REF}" != "refs/heads/${expected_branch}" ]]; then
+              echo "Fork plugin OIDC test mode is restricted to kevinslin/openclaw:${expected_branch}." >&2
+              exit 1
+            fi
+            if [[ "${NPM_DIST_TAG}" != "extended-stable" || "${PUBLISH_SCOPE}" != "selected" || "${RELEASE_PLUGINS}" != "${expected_package}" ]]; then
+              echo "Fork plugin OIDC test mode requires selected ${expected_package} on extended-stable." >&2
+              exit 1
+            fi
+            if [[ ! "${SOURCE_REF}" =~ ^[0-9a-f]{40}$ ]] || [[ "$(git rev-parse HEAD)" != "$(git rev-parse "${SOURCE_REF}^{commit}")" ]]; then
+              echo "Fork plugin OIDC test mode requires ref to be the exact 40-character source SHA." >&2
+              exit 1
+            fi
+            git fetch --no-tags origin "+refs/heads/${expected_branch}:refs/remotes/origin/${expected_branch}"
+            if [[ "$(git rev-parse HEAD)" != "$(git rev-parse "refs/remotes/origin/${expected_branch}")" ]]; then
+              echo "Fork plugin OIDC test mode requires the exact fork branch tip." >&2
+              exit 1
+            fi
+            exit 0
+          fi
           if [[ "${NPM_DIST_TAG}" == "extended-stable" ]]; then
             if [[ "${PUBLISH_SCOPE}" != "all-publishable" || -n "${RELEASE_PLUGINS// }" ]]; then
               echo "Extended-stable plugin publication requires publish_scope=all-publishable without an explicit plugin list." >&2
@@ -139,6 +171,7 @@ jobs:
           exit 1
 
       - name: Validate publishable plugin metadata
+        if: ${{ !inputs.fork_plugin_oidc_test }}
         env:
           PUBLISH_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_scope || '' }}
           RELEASE_PLUGINS: ${{ github.event_name == 'workflow_dispatch' && inputs.plugins || '' }}
@@ -165,6 +198,7 @@ jobs:
       - name: Resolve plugin release plan
         id: plan
         env:
+          FORK_PLUGIN_OIDC_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.fork_plugin_oidc_test || false }}
           PUBLISH_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_scope || '' }}
           RELEASE_PLUGINS: ${{ github.event_name == 'workflow_dispatch' && inputs.plugins || '' }}
           BASE_REF: ${{ github.event_name != 'workflow_dispatch' && github.event.before || '' }}
@@ -173,7 +207,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .local
-          if [[ -n "${PUBLISH_SCOPE}" ]]; then
+          if [[ "${FORK_PLUGIN_OIDC_TEST}" == "true" ]]; then
+            node scripts/retarget-plugin-npm-canary.mjs > .local/fork-plugin-canary.json
+            jq '{all: [(. + {channel: "stable", publishTag: "extended-stable", alreadyPublished: false})], candidates: [(. + {channel: "stable", publishTag: "extended-stable", alreadyPublished: false})], skippedPublished: []}' \
+              .local/fork-plugin-canary.json > .local/plugin-npm-release-plan.json
+          elif [[ -n "${PUBLISH_SCOPE}" ]]; then
             plan_args=(--selection-mode "${PUBLISH_SCOPE}")
             if [[ -n "${RELEASE_PLUGINS}" ]]; then
               plan_args+=(--plugins "${RELEASE_PLUGINS}")
@@ -212,7 +250,7 @@ jobs:
           jq -r '.skippedPublished[]? | "- \(.packageName)@\(.version)"' .local/plugin-npm-release-plan.json
 
       - name: Validate Tideclaw alpha plugin channels
-        if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
+        if: ${{ !inputs.fork_plugin_oidc_test && startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
         run: |
           set -euo pipefail
           invalid="$(
@@ -285,6 +323,10 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
+      - name: Retarget fork plugin OIDC canary
+        if: inputs.fork_plugin_oidc_test
+        run: node scripts/retarget-plugin-npm-canary.mjs
+
       - name: Preview publish command
         env:
           OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
@@ -321,6 +363,10 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
+
+      - name: Retarget fork plugin OIDC canary
+        if: inputs.fork_plugin_oidc_test
+        run: node scripts/retarget-plugin-npm-canary.mjs
 
       - name: Check npm package version
         id: npm_package_version

@@ -1,6 +1,12 @@
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import {
+  FORK_PLUGIN_CANARY,
+  retargetForkPluginNpmCanary,
+} from "../../scripts/retarget-plugin-npm-canary.mjs";
 
 const workflowPath = ".github/workflows/plugin-npm-release.yml";
 
@@ -16,12 +22,26 @@ type Workflow = {
   on?: {
     workflow_dispatch?: {
       inputs?: {
+        fork_plugin_oidc_test?: {
+          default?: boolean;
+          description?: string;
+          required?: boolean;
+          type?: string;
+        };
         npm_dist_tag?: { default?: string; options?: string[]; type?: string };
       };
     };
   };
   jobs?: Record<string, Job>;
 };
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { force: true, recursive: true });
+  }
+});
 
 function workflow(): Workflow {
   return parse(readFileSync(workflowPath, "utf8")) as Workflow;
@@ -47,6 +67,64 @@ describe("plugin npm extended-stable workflow", () => {
       default: "default",
       type: "choice",
       options: ["default", "extended-stable"],
+    });
+  });
+
+  it("keeps the fork OIDC canary disabled and fail-closed by default", () => {
+    const parsed = workflow();
+    expect(parsed.on?.workflow_dispatch?.inputs?.fork_plugin_oidc_test).toEqual({
+      description: "Fork-only canary; retarget one plugin to the fixed fork-owned npm package",
+      required: true,
+      default: false,
+      type: "boolean",
+    });
+    const trusted = step(
+      parsed.jobs?.preview_plugins_npm,
+      "Validate ref is on a trusted publish branch",
+    );
+    expect(trusted.run).toContain('GITHUB_REPOSITORY}" != "kevinslin/openclaw"');
+    expect(trusted.run).toContain('expected_branch="dev/kevinlin/fork-plugin-oidc-test"');
+    expect(trusted.run).toContain('expected_package="@kevins8/openclaw-plugin-stable-e2e"');
+    expect(trusted.run).toContain(
+      "The canonical repository may not enable fork plugin OIDC test mode",
+    );
+    expect(trusted.run).toContain("requires the exact fork branch tip");
+  });
+
+  it("retargets only the fixed representative plugin and its shrinkwrap", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-plugin-oidc-canary-"));
+    tempDirs.push(root);
+    const packageDir = join(root, FORK_PLUGIN_CANARY.packageDir);
+    mkdirSync(packageDir, { recursive: true });
+    cpSync("extensions/arcee/package.json", join(packageDir, "package.json"));
+    cpSync("extensions/arcee/npm-shrinkwrap.json", join(packageDir, "npm-shrinkwrap.json"));
+
+    const result = retargetForkPluginNpmCanary(root);
+    const packageJson = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
+    const shrinkwrap = JSON.parse(readFileSync(join(packageDir, "npm-shrinkwrap.json"), "utf8"));
+
+    expect(result).toMatchObject({
+      packageDir: FORK_PLUGIN_CANARY.packageDir,
+      packageName: FORK_PLUGIN_CANARY.packageName,
+      repository: FORK_PLUGIN_CANARY.repository,
+      version: FORK_PLUGIN_CANARY.version,
+    });
+    expect(packageJson).toMatchObject({
+      name: FORK_PLUGIN_CANARY.packageName,
+      version: FORK_PLUGIN_CANARY.version,
+      repository: { type: "git", url: "https://github.com/kevinslin/openclaw" },
+      publishConfig: { access: "public", registry: "https://registry.npmjs.org/" },
+      openclaw: { install: { npmSpec: FORK_PLUGIN_CANARY.packageName } },
+    });
+    expect(shrinkwrap).toMatchObject({
+      name: FORK_PLUGIN_CANARY.packageName,
+      version: FORK_PLUGIN_CANARY.version,
+      packages: {
+        "": {
+          name: FORK_PLUGIN_CANARY.packageName,
+          version: FORK_PLUGIN_CANARY.version,
+        },
+      },
     });
   });
 
